@@ -5,7 +5,7 @@
 
 use crate::browser::{Browser, HOME, Response};
 use crate::riot::{NetStats, dump};
-use crate::stats::{ActRecord, Record, RecordSource};
+use crate::stats::{ActRecord, PlayerMatch, Record, RecordSource};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -230,6 +230,10 @@ impl Tracker {
     pub async fn maps(&self, riot_id: &str, act_id: &str) -> Result<Option<Value>> {
         self.get(&format!("/profile/riot/{riot_id}/segments/map?playlist=competitive&seasonId={act_id}&source=web")).await
     }
+
+    pub async fn matches(&self, riot_id: &str) -> Result<Option<Value>> {
+        self.get(&format!("/matches/riot/{riot_id}?platform=pc&type=competitive")).await
+    }
 }
 
 /// `name#tag` as it appears in tracker.gg's URLs: every byte outside the unreserved set is
@@ -334,6 +338,27 @@ pub fn parse_maps(v: &Value) -> Vec<(String, Record)> {
     maps
 }
 
+/// The newest `count` matches from `/matches/riot/{id}`.
+pub fn parse_matches(v: &Value, count: usize) -> Vec<PlayerMatch> {
+    v["data"]["matches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let seg = m["segments"].as_array()?.iter().find(|s| s["type"] == "overview")?;
+            let n = |k: &str| stat_u32(&seg["stats"], k);
+            Some(PlayerMatch {
+                kills: n("kills"),
+                deaths: n("deaths"),
+                headshots: n("dealtHeadshots"),
+                bodyshots: n("dealtBodyshots"),
+                legshots: n("dealtLegshots"),
+            })
+        })
+        .take(count)
+        .collect()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -407,6 +432,37 @@ pub(crate) mod tests {
         let names: Vec<_> = maps.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, ["Ascent", "Bind", "Abyss"]);
         assert_eq!(maps[1].1, Record { wins: 5, losses: 2 });
+    }
+
+    #[test]
+    fn matches_read_the_players_side() {
+        let st = |k: &str, v: f64| (k.to_string(), stat(json!(v)));
+        let stats: serde_json::Map<String, Value> = [
+            st("roundsWon", 13.0),
+            st("roundsLost", 7.0),
+            st("kills", 24.0),
+            st("deaths", 13.0),
+            st("assists", 7.0),
+            st("score", 7037.0),
+            st("roundsPlayed", 20.0),
+            st("damage", 4300.0),
+            st("dealtHeadshots", 4.0),
+            st("dealtBodyshots", 40.0),
+            st("dealtLegshots", 0.0),
+            st("performance", 400.97),
+        ]
+        .into_iter()
+        .collect();
+        let m = |id: &str, result: &str| {
+            json!({ "attributes": { "id": id }, "metadata": { "map": "92584fbe", "result": result },
+                    "segments": [{ "type": "overview", "metadata": { "agent": "add6443a" }, "stats": stats.clone() }] })
+        };
+        let v =
+            json!({ "data": { "matches": [m("m1", "victory"), m("m2", "defeat"), m("m3", "draw"), { "attributes": { "id": "bad" } }] } });
+        let all = parse_matches(&v, 5);
+        assert_eq!(all.len(), 3, "a match without the player's segment is skipped");
+        assert_eq!(all[0], PlayerMatch { kills: 24, deaths: 13, headshots: 4, bodyshots: 40, legshots: 0 });
+        assert_eq!(parse_matches(&v, 1).len(), 1);
     }
 
     pub(crate) fn answer(status: u16, retry_after: Option<&str>, body: &str) -> Response {

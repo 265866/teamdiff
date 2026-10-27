@@ -1,4 +1,4 @@
-//! Win-loss records.
+//! Records and per-match stats.
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Record {
@@ -25,4 +25,51 @@ pub enum RecordSource {
 pub struct ActRecord {
     pub record: Record,
     pub source: RecordSource,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PlayerMatch {
+    pub kills: u32,
+    pub deaths: u32,
+    pub headshots: u32,
+    pub bodyshots: u32,
+    pub legshots: u32,
+}
+
+impl PlayerMatch {
+    pub fn shots(&self) -> u32 {
+        self.headshots + self.bodyshots + self.legshots
+    }
+}
+
+/// K/D and headshot % pooled over a player's matches: total kills over total deaths, and total
+/// headshots over total shots, so bigger games count for more.
+pub fn pooled_kd_hs<'a>(matches: impl IntoIterator<Item = &'a PlayerMatch>) -> (Option<f64>, Option<u32>) {
+    let (mut k, mut d, mut hs, mut shots, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    for p in matches {
+        k += p.kills;
+        d += p.deaths;
+        hs += p.headshots;
+        shots += p.shots();
+        n += 1;
+    }
+    let kd = (n > 0).then(|| if d == 0 { k as f64 } else { k as f64 / d as f64 });
+    let hs_pct = (shots > 0).then(|| (hs as f64 * 100.0 / shots as f64).round() as u32);
+    (kd, hs_pct)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pooled_stats_weight_bigger_games() {
+        let g = |k, d, hs, body| PlayerMatch { kills: k, deaths: d, headshots: hs, bodyshots: body, ..Default::default() };
+        let games = [g(20, 10, 10, 30), g(5, 10, 0, 10)];
+        let (kd, hs) = pooled_kd_hs(&games);
+        assert_eq!(kd, Some(1.25), "25 kills / 20 deaths, not the mean of 2.0 and 0.5");
+        assert_eq!(hs, Some(20), "10 / 50 shots");
+        assert_eq!(pooled_kd_hs(&[]), (None, None));
+        assert_eq!(pooled_kd_hs(&[g(7, 0, 0, 0)]), (Some(7.0), None));
+    }
 }

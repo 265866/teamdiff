@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 pub type Shared = Arc<Mutex<Model>>;
 
+/// Matches used for each player's K/D and HS%.
+const RECENT_MATCHES: usize = 5;
 /// How long a failed load waits before the next tick may retry it.
 const RETRY_AFTER: Duration = Duration::from_secs(10);
 
@@ -276,7 +278,7 @@ fn update(shared: &Shared, puuid: &str, f: impl FnOnce(&mut PlayerData)) {
     f(lock(shared).players.entry(puuid.to_string()).or_default());
 }
 
-/// Rank, act record and map records for one player from tracker.gg. A player
+/// Rank, act record, map records and recent matches for one player from tracker.gg. A player
 /// tracker.gg doesn't know, or whose profile is private, is shown as such and not asked about again;
 /// any other failure is returned so the load is retried.
 async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &str, act: &str) -> Result<()> {
@@ -287,6 +289,7 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
         update(shared, puuid, |d| {
             d.profile = state(private);
             d.maps = state(private);
+            d.recent = state(private);
         })
     };
     let v = match tracker.profile(riot_id).await {
@@ -316,6 +319,12 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
     let maps = if played { tracker.maps(riot_id, act).await } else { Ok(None) };
     let maps = private_or(maps)?.map(|v| v.map(|v| tracker::parse_maps(&v)).unwrap_or_default());
     update(shared, puuid, |d| d.maps = maps);
+    let Load::Ready(v) = private_or(tracker.matches(riot_id).await)? else {
+        update(shared, puuid, |d| d.recent = Load::Private);
+        return Ok(());
+    };
+    let recent = v.as_ref().map(|v| tracker::parse_matches(v, RECENT_MATCHES)).unwrap_or_default();
+    update(shared, puuid, |d| d.recent = Load::Ready(recent));
     Ok(())
 }
 
@@ -360,7 +369,7 @@ mod tests {
         let d = &m.players["p"];
         // The canned tracker panics on a second request, so nothing else was asked for.
         assert_eq!(d.profile, Load::Private);
-        assert_eq!(d.maps.clone().map(|_| ()), Load::Private);
+        assert_eq!((d.maps.clone().map(|_| ()), d.recent.clone().map(|_| ())), (Load::Private, Load::Private));
     }
 
     #[tokio::test]
@@ -368,21 +377,22 @@ mod tests {
         let answer = crate::tracker::tests::answer;
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
         let body = profile_body("public").replace(r#""privacy":"public""#, r#""privacy":"premier""#);
-        let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, "")]);
+        let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, ""), answer(404, None, "")]);
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
         assert!(matches!(&lock(&shared).players["p"].profile, Load::Ready(p) if p.tier == 14));
     }
 
     #[tokio::test]
-    async fn private_maps_are_private_not_a_failure() {
+    async fn private_maps_or_matches_are_private_not_a_failure() {
         let answer = crate::tracker::tests::answer;
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
-        let tracker = Tracker::canned(vec![answer(200, None, &profile_body("public")), answer(451, None, "")]);
+        let refused = || answer(451, None, "");
+        let tracker = Tracker::canned(vec![answer(200, None, &profile_body("public")), refused(), refused()]);
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
         let m = lock(&shared);
         let d = &m.players["p"];
         assert!(matches!(&d.profile, Load::Ready(p) if p.tier == 14));
-        assert_eq!(d.maps.clone().map(|_| ()), Load::Private);
+        assert_eq!((d.maps.clone().map(|_| ()), d.recent.clone().map(|_| ())), (Load::Private, Load::Private));
     }
 
     /// tracker.gg's `platformUserId` is its own id, never the Riot puuid the lobby uses.
@@ -393,7 +403,7 @@ mod tests {
             r#"{{"data":{{"platformInfo":{{"platformUserId":"tracker-gg-own-id"}},"segments":[{{"type":"season","attributes":{{"seasonId":"{act}"}},"stats":{{"rank":{{"value":40,"metadata":{{"iconUrl":"https://x/tiersv2/14.png"}}}},"matchesWon":{{"value":3}},"matchesLost":{{"value":2}}}}}}]}}}}"#
         );
         let answer = crate::tracker::tests::answer;
-        let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, "")]);
+        let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, ""), answer(404, None, "")]);
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
         let riot_puuid = "riot-puuid";
         load_player(&tracker, &shared, riot_puuid, "a%23b", act).await.unwrap();

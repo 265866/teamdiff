@@ -3,7 +3,7 @@
 use crate::content::Content;
 use crate::presence::Presence;
 use crate::riot::NetStats;
-use crate::stats::Record;
+use crate::stats::{PlayerMatch, Record};
 use crate::tracker::Profile;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -141,6 +141,7 @@ pub struct PlayerData {
     pub profile: Load<Profile>,
     /// Wins and losses per map this act, by map name.
     pub maps: Load<Vec<(String, Record)>>,
+    pub recent: Load<Vec<PlayerMatch>>,
 }
 
 #[derive(Debug, Clone)]

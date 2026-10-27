@@ -3,7 +3,7 @@
 use crate::content::Content;
 use crate::model::{Load, Lobby, Model, Phase, Pick, Side, Slot};
 use crate::riot::NetStats;
-use crate::stats::{Record, RecordSource};
+use crate::stats::{Record, RecordSource, pooled_kd_hs};
 use chrono::Utc;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -272,7 +272,14 @@ fn lobby_cols(map: &str) -> Vec<Col> {
         col("PEAK", 11, false),
         col("WIN% THIS ACT", 15, false),
         col(&map_title, 14, false),
+        col("K/D", 4, true),
+        col("HS%", 4, true),
     ]
+}
+
+fn last5_header(cols: &[Col]) -> Row {
+    let start: usize = cols[..8].iter().enumerate().map(|(i, c)| c.w + usize::from(i > 0)).sum::<usize>() + 1;
+    vec![s(" ".repeat(start), Style::new()), s(" LAST 5  ", dim())].into()
 }
 
 fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMap<String, Seg>) -> Row {
@@ -331,7 +338,31 @@ fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool,
             if r.games() == 0 { no_record() } else { record_segs(r, r.games() < 5) }
         }
     };
-    join(cols, vec![party_cell, agent, name, lvl, rank, peak, act, map])
+    let (kd, hs) = match data.map(|d| &d.recent) {
+        _ if hidden => (dash(), dash()),
+        None | Some(Load::Loading) => (loading(), loading()),
+        Some(Load::Missing | Load::Private) => (dash(), dash()),
+        Some(Load::Ready(recent)) => {
+            let (kd, hs) = pooled_kd_hs(recent);
+            let kd = kd
+                .map(|k| {
+                    vec![s(
+                        format!("{k:.2}"),
+                        if k >= 1.15 {
+                            good()
+                        } else if k < 0.9 {
+                            bad()
+                        } else {
+                            text()
+                        },
+                    )]
+                })
+                .unwrap_or_else(|| vec![s("—", dim())]);
+            let hs = hs.map(|h| vec![s(format!("{h}%"), text())]).unwrap_or_else(|| vec![s("—", dim())]);
+            (kd, hs)
+        }
+    };
+    join(cols, vec![party_cell, agent, name, lvl, rank, peak, act, map, kd, hs])
 }
 
 fn lobby_screen(m: &Model, pregame: bool) -> Screen {
@@ -375,6 +406,7 @@ fn lobby_screen(m: &Model, pregame: bool) -> Screen {
                 }
                 rows.push(vec![s(label, style.add_modifier(Modifier::BOLD))].into());
                 if side == Side::Ally {
+                    rows.push(last5_header(&cols));
                     rows.push(header(&cols));
                 }
                 for slot in slots {
