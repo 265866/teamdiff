@@ -5,7 +5,7 @@ use crate::goldstars::{ALL_TIME, Accolade, Earned, MatchAccolades, PlayerGoldsta
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Postgame, Side, Slot};
 use crate::presence::{LoopState, Presence};
 use crate::stats::{CompUpdate, MatchSummary, PlayerMatch, Record};
-use crate::tracker::{ActStats, Profile, RecentMatch};
+use crate::tracker::{ActStats, MatchSide, Profile, RecentMatch};
 use chrono::{Duration as Days, Utc};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -143,6 +143,7 @@ fn player_data(p: &P) -> PlayerData {
         maps: Load::Ready(maps),
         recent: Load::Ready(recent),
         history,
+        sides: Vec::new(),
     }
 }
 
@@ -279,6 +280,10 @@ pub fn model(screen: &str) -> Model {
     };
     for p in &roster {
         let mut d = player_data(p);
+        // Riot shares only your friends' parties; the enemies' come from their tracker.gg histories.
+        if let (Some(party), Side::Enemy) = (p.party, p.side) {
+            d.sides = (0..3).map(|i| MatchSide { match_id: format!("{party}{i}"), rounds_won: 13, rounds_lost: 9 }).collect();
+        }
         if screen == "loading" && p.side == Side::Enemy && p.id != "raze" {
             d = PlayerData { name: d.name, ..Default::default() };
         }
@@ -295,6 +300,7 @@ pub fn model(screen: &str) -> Model {
                     puuid: p.id.into(),
                     state: Some(state),
                     party_id: Some(party.into()),
+                    party_size: None,
                     queue_id: Some("competitive".into()),
                     score: Some((5, 3)),
                     queue_entry_time: Some((Utc::now() - Days::seconds(72)).format("%Y.%m.%d-%H.%M.%S").to_string()),

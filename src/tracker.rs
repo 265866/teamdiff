@@ -353,6 +353,32 @@ pub fn parse_maps(v: &Value) -> Vec<(String, Record)> {
     maps
 }
 
+/// A match a player was in, with their team's score: two players with the same entry were teammates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MatchSide {
+    pub match_id: String,
+    pub rounds_won: u32,
+    pub rounds_lost: u32,
+}
+
+/// Every decided match in a `/matches` response, as `MatchSide`s. A tie, or a match without a score,
+/// gives both teams the same entry, so it can't tell teammates apart and is left out.
+pub fn parse_match_sides(v: &Value) -> Vec<MatchSide> {
+    v["data"]["matches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let seg = m["segments"].as_array()?.iter().find(|s| s["type"] == "overview")?;
+            let (won, lost) = (stat_u32(&seg["stats"], "roundsWon"), stat_u32(&seg["stats"], "roundsLost"));
+            if won == lost {
+                return None;
+            }
+            Some(MatchSide { match_id: m["attributes"]["id"].as_str()?.to_lowercase(), rounds_won: won, rounds_lost: lost })
+        })
+        .collect()
+}
+
 /// The newest `count` matches from `/matches/riot/{id}`.
 pub fn parse_matches(v: &Value, count: usize) -> Vec<RecentMatch> {
     v["data"]["matches"]
@@ -495,6 +521,12 @@ pub(crate) mod tests {
             json!({ "data": { "matches": [m("m1", "victory"), m("m2", "defeat"), m("m3", "draw"), { "attributes": { "id": "bad" } }] } });
         let all = parse_matches(&v, 5);
         assert_eq!(all.len(), 3, "a match without the player's segment is skipped");
+        let sides = parse_match_sides(&v);
+        assert_eq!(sides.len(), 3);
+        assert_eq!(sides[0], MatchSide { match_id: "m1".into(), rounds_won: 13, rounds_lost: 7 });
+        let mut tie = v.clone();
+        tie["data"]["matches"][0]["segments"][0]["stats"]["roundsLost"] = stat(json!(13.0));
+        assert_eq!(parse_match_sides(&tie).len(), 2, "a tie gives both teams the same entry, so it's left out");
         let first = &all[0];
         assert_eq!((first.won, first.rounds_won, first.rounds_lost, first.map_id.as_str()), (Some(true), 13, 7, "92584fbe"));
         assert_eq!((first.player.kills, first.player.deaths, first.player.assists, first.player.acs()), (24, 13, 7, 352));

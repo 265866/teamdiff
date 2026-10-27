@@ -410,6 +410,7 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
             d.profile = state(private);
             d.maps = state(private);
             d.recent = state(private);
+            d.sides.clear();
         })
     };
     let v = match tracker.profile(riot_id).await {
@@ -440,11 +441,18 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
     let maps = private_or(maps)?.map(|v| v.map(|v| tracker::parse_maps(&v)).unwrap_or_default());
     update(shared, puuid, |d| d.maps = maps);
     let Load::Ready(v) = private_or(tracker.matches(riot_id).await)? else {
-        update(shared, puuid, |d| d.recent = Load::Private);
+        update(shared, puuid, |d| {
+            d.recent = Load::Private;
+            d.sides.clear();
+        });
         return Ok(());
     };
     let recent = v.as_ref().map(|v| tracker::parse_matches(v, RECENT_MATCHES)).unwrap_or_default();
-    update(shared, puuid, |d| d.recent = Load::Ready(recent));
+    let sides = v.as_ref().map(tracker::parse_match_sides).unwrap_or_default();
+    update(shared, puuid, |d| {
+        d.recent = Load::Ready(recent);
+        d.sides = sides;
+    });
     Ok(())
 }
 
@@ -595,6 +603,9 @@ mod tests {
     async fn private_maps_or_matches_are_private_not_a_failure() {
         let answer = crate::tracker::tests::answer;
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        // Public in an earlier match this session.
+        let side = crate::tracker::MatchSide { match_id: "m1".into(), rounds_won: 13, rounds_lost: 7 };
+        lock(&shared).players.insert("p".into(), PlayerData { sides: vec![side], ..Default::default() });
         let refused = || answer(451, None, "");
         let tracker = Tracker::canned(vec![answer(200, None, &profile_body("public")), refused(), refused()]);
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
@@ -602,6 +613,7 @@ mod tests {
         let d = &m.players["p"];
         assert_eq!(d.profile.ready().map(|p| p.tier), Some(14));
         assert_eq!((d.maps.clone().map(|_| ()), d.recent.clone().map(|_| ())), (Load::Private, Load::Private));
+        assert!(d.sides.is_empty(), "an old history isn't used once it's private");
     }
 
     /// tracker.gg's `platformUserId` is its own id, never the Riot puuid the lobby uses.
