@@ -32,6 +32,8 @@ pub struct Presence {
     pub state: Option<LoopState>,
     pub party_id: Option<String>,
     pub queue_id: Option<String>,
+    /// (ally, enemy) rounds won, from the party owner's point of view.
+    pub score: Option<(u32, u32)>,
     pub queue_entry_time: Option<String>,
     /// e.g. "MATCHMAKING" while queueing.
     pub party_state: Option<String>,
@@ -60,11 +62,16 @@ fn decode(puuid: &str, private: &str) -> Option<Presence> {
     }
     let str_of = |k| find(&v, k).and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
     let num_of = |k| find(&v, k).and_then(Value::as_u64).map(|n| n as u32);
+    let score = match (num_of("partyOwnerMatchScoreAllyTeam"), num_of("partyOwnerMatchScoreEnemyTeam")) {
+        (Some(a), Some(e)) => Some((a, e)),
+        _ => None,
+    };
     Some(Presence {
         puuid: puuid.to_string(),
         state: str_of("sessionLoopState").map(|s| LoopState::parse(&s)),
         party_id: str_of("partyId"),
         queue_id: str_of("queueId"),
+        score,
         queue_entry_time: str_of("queueEntryTime"),
         party_state: str_of("partyState"),
         account_level: num_of("accountLevel"),
@@ -93,12 +100,13 @@ mod tests {
     fn reads_flat_layout() {
         let body = json!({ "presences": [wrap("me", &json!({
             "isValid": true, "sessionLoopState": "INGAME", "partyId": "p1", "partySize": 2, "accountLevel": 214, "partyState": "DEFAULT",
-            "queueId": "competitive"
+            "queueId": "competitive", "partyOwnerMatchScoreAllyTeam": 5, "partyOwnerMatchScoreEnemyTeam": 3
         }))]});
         let p = &parse_presences(&body)[0];
         assert_eq!(p.state, Some(LoopState::Ingame));
         assert_eq!(p.party_id.as_deref(), Some("p1"));
         assert_eq!(p.queue_id.as_deref(), Some("competitive"));
+        assert_eq!(p.score, Some((5, 3)));
         assert_eq!(p.account_level, Some(214));
         assert_eq!(p.party_state.as_deref(), Some("DEFAULT"));
     }
@@ -113,6 +121,7 @@ mod tests {
         let p = &parse_presences(&body)[0];
         assert_eq!(p.state, Some(LoopState::Pregame));
         assert_eq!(p.party_id.as_deref(), Some("p9"));
+        assert_eq!(p.score, None);
     }
 
     #[test]

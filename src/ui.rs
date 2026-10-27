@@ -1,6 +1,6 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
-use crate::model::{Model, Phase, Pick, Slot};
+use crate::model::{Model, Phase, Pick, Side, Slot};
 use crate::riot::NetStats;
 use chrono::Utc;
 use ratatui::Frame;
@@ -37,6 +37,9 @@ fn bold() -> Style {
 }
 fn ally() -> Style {
     fg(rgb(0x4f, 0xd1, 0xc5))
+}
+fn enemy() -> Style {
+    fg(rgb(0xf8, 0x71, 0x71))
 }
 fn you() -> Style {
     fg(rgb(0xfb, 0xbf, 0x24)).add_modifier(Modifier::BOLD)
@@ -206,19 +209,20 @@ fn lobby_cols() -> Vec<Col> {
     vec![col("", 1, false), col("AGENT", 11, false), col("PLAYER", 18, false), col("LVL", 4, true)]
 }
 
-fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], party: &HashMap<String, Seg>) -> Row {
+fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMap<String, Seg>) -> Row {
     let content = &m.content;
     let party_cell = match party.get(&slot.puuid) {
         Some(mark) => vec![mark.clone()],
         None => vec![s(" ", Style::new())],
     };
     let agent_name = slot.agent_id.as_deref().map(|a| content.agent(a));
-    let agent = match (slot.pick, &agent_name) {
-        (Pick::Locked, Some(a)) => vec![s("◆ ", dim()), s(a.clone(), bold())],
-        (Pick::Hover, Some(a)) => vec![s("◇ ", dim()), s(a.clone(), dim().add_modifier(Modifier::ITALIC))],
+    let agent = match (pregame, slot.pick, &agent_name) {
+        (false, _, Some(a)) => vec![s(a.clone(), bold())],
+        (true, Pick::Locked, Some(a)) => vec![s("◆ ", dim()), s(a.clone(), bold())],
+        (true, Pick::Hover, Some(a)) => vec![s("◇ ", dim()), s(a.clone(), dim().add_modifier(Modifier::ITALIC))],
         _ => vec![s("  —", dim())],
     };
-    let shown_agent = if slot.pick == Pick::None { None } else { slot.agent_id.as_deref() };
+    let shown_agent = if pregame && slot.pick == Pick::None { None } else { slot.agent_id.as_deref() };
     let name = name_segs(m, &slot.puuid, slot.incognito, shown_agent);
     let lvl = match (slot.hide_level, slot.level) {
         (false, Some(l)) => vec![s(l.to_string(), text())],
@@ -227,15 +231,25 @@ fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], party: &HashMap<String, Seg>)
     join(cols, vec![party_cell, agent, name, lvl])
 }
 
-fn lobby_screen(m: &Model) -> Screen {
+fn lobby_screen(m: &Model, pregame: bool) -> Screen {
     let lobby = m.lobby.as_ref();
     let map = lobby.map(|l| m.content.map(&l.map_url)).unwrap_or_default();
     let queue = lobby.map(|l| queue_name(&l.queue)).unwrap_or_default();
+    let title = if pregame { "AGENT SELECT" } else { "IN GAME" };
     let mut right = vec![s(format!("{queue} · {map}"), dim())];
-    if let Some(end) = lobby.and_then(|l| l.phase_ends) {
-        let left = end.saturating_duration_since(Instant::now()).as_secs();
-        right.push(s(" · ", dim()));
-        right.push(s(format!("{}:{:02}", left / 60, left % 60), warn()));
+    if pregame {
+        if let Some(end) = lobby.and_then(|l| l.phase_ends) {
+            let left = end.saturating_duration_since(Instant::now()).as_secs();
+            right.push(s(" · ", dim()));
+            right.push(s(format!("{}:{:02}", left / 60, left % 60), warn()));
+        }
+    } else if let Some((a, e)) = m.my_presence().and_then(|p| p.score) {
+        right.extend([
+            s(" · ", dim()),
+            s(a.to_string(), ally().add_modifier(Modifier::BOLD)),
+            s(" – ", dim()),
+            s(e.to_string(), enemy().add_modifier(Modifier::BOLD)),
+        ]);
     }
     let mut rows = Vec::new();
     match lobby {
@@ -248,14 +262,25 @@ fn lobby_screen(m: &Model) -> Screen {
         Some(l) => {
             let cols = lobby_cols();
             let party = party_marks(&m.parties());
-            rows.push(vec![s("YOUR TEAM", ally().add_modifier(Modifier::BOLD))].into());
-            rows.push(header(&cols));
-            for slot in &l.slots {
-                rows.push(lobby_row(m, slot, &cols, &party));
+            for (side, label, style) in [(Side::Ally, "YOUR TEAM", ally()), (Side::Enemy, "ENEMY TEAM", enemy())] {
+                let slots: Vec<&Slot> = l.slots.iter().filter(|s| s.side == side).collect();
+                if slots.is_empty() {
+                    continue;
+                }
+                if side == Side::Enemy {
+                    rows.push(blank());
+                }
+                rows.push(vec![s(label, style.add_modifier(Modifier::BOLD))].into());
+                if side == Side::Ally {
+                    rows.push(header(&cols));
+                }
+                for slot in slots {
+                    rows.push(lobby_row(m, slot, &cols, pregame, &party));
+                }
             }
         }
     }
-    Screen { title: vec![s("AGENT SELECT", bold())], right, rows, footer: keys(&[("q", "quit")]) }
+    Screen { title: vec![s(title, bold())], right, rows, footer: keys(&[("q", "quit")]) }
 }
 
 // ---------- menus / waiting ----------
@@ -332,7 +357,8 @@ fn screen(m: &Model) -> Screen {
     match &m.phase {
         Phase::Waiting(reason) => waiting_screen(reason),
         Phase::Menus => menus_screen(m),
-        Phase::Pregame => lobby_screen(m),
+        Phase::Pregame => lobby_screen(m, true),
+        Phase::Ingame => lobby_screen(m, false),
     }
 }
 

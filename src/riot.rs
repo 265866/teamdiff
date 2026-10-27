@@ -141,10 +141,11 @@ impl Riot {
         self.net.started.fetch_add(1, Ordering::Relaxed);
         let result = self.send_with_retry(method, &url, body).await;
         self.net.finished.fetch_add(1, Ordering::Relaxed);
-        // Agent select's lobby carries what the game hides, such as the enemy team's lock count and
-        // your starting side, so --dump never saves it.
+        // The lobbies of agent select and the match carry what the game hides, such as the enemy
+        // team's lock count, the starting side and the server, so --dump never saves them.
         if let Ok(Some(v)) = &result
             && !path.starts_with("/pregame/v1/matches/")
+            && !path.starts_with("/core-game/v1/matches/")
         {
             dump(self.dump_dir.as_deref(), path, v);
         }
@@ -208,6 +209,15 @@ impl Riot {
 
     pub async fn pregame_match(&self, id: &str) -> Result<Option<Value>> {
         self.get(Host::Glz, &format!("/pregame/v1/matches/{id}")).await
+    }
+
+    pub async fn coregame_match_id(&self) -> Result<Option<String>> {
+        let v = self.get(Host::Glz, &format!("/core-game/v1/players/{}", self.puuid)).await?;
+        Ok(v.and_then(|v| v["MatchID"].as_str().map(str::to_string)))
+    }
+
+    pub async fn coregame_match(&self, id: &str) -> Result<Option<Value>> {
+        self.get(Host::Glz, &format!("/core-game/v1/matches/{id}")).await
     }
 
     /// Riot ids for the given players, as (puuid, name, tag).

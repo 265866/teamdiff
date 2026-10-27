@@ -1,6 +1,6 @@
 //! Network side: follows the game's state through presence and loads player data in the background.
 
-use crate::model::{Lobby, Model, Phase, parse_pregame};
+use crate::model::{Lobby, Model, Phase, parse_coregame, parse_pregame};
 use crate::presence::LoopState;
 use crate::riot::{Riot, connect};
 use anyhow::Result;
@@ -92,13 +92,14 @@ struct Session {
     riot: Arc<Riot>,
     shared: Shared,
     pregame_id: Option<String>,
+    core_id: Option<String>,
     named: Claims,
     client_gone: bool,
 }
 
 impl Session {
     fn new(riot: Arc<Riot>, shared: Shared) -> Self {
-        Self { riot, shared, pregame_id: None, named: Claims::default(), client_gone: false }
+        Self { riot, shared, pregame_id: None, core_id: None, named: Claims::default(), client_gone: false }
     }
 
     async fn tick(&mut self) -> Result<()> {
@@ -118,7 +119,8 @@ impl Session {
         match state {
             None => self.set_phase(Phase::Waiting("VALORANT isn't running".into())),
             Some(LoopState::Pregame) => self.pregame().await?,
-            Some(LoopState::Menus | LoopState::Ingame | LoopState::Other(_)) => self.menus(),
+            Some(LoopState::Ingame) => self.ingame().await?,
+            Some(LoopState::Menus) | Some(LoopState::Other(_)) => self.menus(),
         }
         Ok(())
     }
@@ -129,6 +131,7 @@ impl Session {
 
     fn menus(&mut self) {
         self.pregame_id = None;
+        self.core_id = None;
         let party: Vec<String> = {
             let mut m = lock(&self.shared);
             m.phase = Phase::Menus;
@@ -141,6 +144,7 @@ impl Session {
     }
 
     async fn pregame(&mut self) -> Result<()> {
+        self.core_id = None;
         if self.pregame_id.is_none() {
             self.pregame_id = self.riot.pregame_match_id().await?;
         }
@@ -152,6 +156,25 @@ impl Session {
         if let Some(lobby) = parse_pregame(&v, Instant::now()) {
             self.show_lobby(Phase::Pregame, lobby);
         }
+        Ok(())
+    }
+
+    async fn ingame(&mut self) -> Result<()> {
+        self.pregame_id = None;
+        if self.core_id.is_none() {
+            self.core_id = self.riot.coregame_match_id().await?;
+        }
+        let Some(id) = self.core_id.clone() else { return Ok(()) };
+        let current = lock(&self.shared).ingame_lobby(&id).cloned();
+        let lobby = match current {
+            Some(l) => l,
+            None => {
+                let Some(v) = self.riot.coregame_match(&id).await? else { return Ok(()) };
+                let Some(lobby) = parse_coregame(&v, &self.riot.puuid) else { return Ok(()) };
+                lobby
+            }
+        };
+        self.show_lobby(Phase::Ingame, lobby);
         Ok(())
     }
 
