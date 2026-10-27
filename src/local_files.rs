@@ -1,4 +1,4 @@
-//! The lockfile the Riot Client leaves on disk while it runs.
+//! Files the Riot Client and VALORANT leave on disk: the client lockfile and the game log.
 
 use anyhow::{Context, Result, anyhow};
 use std::path::PathBuf;
@@ -28,6 +28,39 @@ pub fn lockfile_path() -> Option<PathBuf> {
     local_app_data().map(|d| d.join("Riot Games").join("Riot Client").join("Config").join("lockfile"))
 }
 
+pub fn game_log_path() -> Option<PathBuf> {
+    local_app_data().map(|d| d.join("VALORANT").join("Saved").join("Logs").join("ShooterGame.log"))
+}
+
+/// Region, shard, and client version, as the game last recorded them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameLogInfo {
+    pub region: String,
+    pub shard: String,
+    pub client_version: String,
+}
+
+pub fn parse_game_log(text: &str) -> Result<GameLogInfo> {
+    let client_version = text
+        .lines()
+        .find_map(|l| l.split("CI server version: ").nth(1))
+        .map(|v| v.split_whitespace().next().unwrap_or("").to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("no client version in game log"))?;
+    // e.g. https://glz-eu-1.eu.a.pvp.net
+    let (region, shard) = text
+        .split("https://glz-")
+        .skip(1)
+        .find_map(|rest| {
+            let host = rest.split(['/', ' ', ']', '"']).next()?;
+            let (region, tail) = host.split_once("-1.")?;
+            let shard = tail.strip_suffix(".a.pvp.net")?;
+            Some((region.to_string(), shard.to_string()))
+        })
+        .ok_or_else(|| anyhow!("no glz host in game log"))?;
+    Ok(GameLogInfo { region, shard, client_version })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,5 +75,27 @@ mod tests {
     fn rejects_malformed_lockfile() {
         assert!(parse_lockfile("Riot Client:32076:https").is_err());
         assert!(parse_lockfile("Riot Client:1:notaport:pw:https").is_err());
+    }
+
+    #[test]
+    fn parses_game_log() {
+        let log = "[2026.01.01-00.00.00:000][  0]LogShooter: Display: CI server version: release-13.08-shipping-14-1234567\n\
+                   [2026.01.01-00.00.03:000][ 46]LogPlatformCommon: Platform HTTP Query End. URL [GET https://glz-eu-1.eu.a.pvp.net/pregame/v1/players/x], ok\n";
+        let info = parse_game_log(log).unwrap();
+        assert_eq!(info.client_version, "release-13.08-shipping-14-1234567");
+        assert_eq!(info.region, "eu");
+        assert_eq!(info.shard, "eu");
+    }
+
+    #[test]
+    fn latam_region_uses_na_shard() {
+        let log = "CI server version: release-13.08-shipping-14-1\nURL [GET https://glz-latam-1.na.a.pvp.net/session]";
+        let info = parse_game_log(log).unwrap();
+        assert_eq!((info.region.as_str(), info.shard.as_str()), ("latam", "na"));
+    }
+
+    #[test]
+    fn game_log_without_version_is_an_error() {
+        assert!(parse_game_log("https://glz-eu-1.eu.a.pvp.net/x").is_err());
     }
 }

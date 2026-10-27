@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
+use std::collections::HashMap;
 use unicode_width::UnicodeWidthStr;
 
 /// Every screen is this many columns wide; narrower terminals get the too-small screen.
@@ -37,6 +38,7 @@ fn you() -> Style {
 fn good() -> Style {
     fg(rgb(0x4a, 0xde, 0x80))
 }
+const PARTY: [Color; 4] = [rgb(0x60, 0xa5, 0xfa), rgb(0xe8, 0x79, 0xf9), rgb(0xfb, 0x92, 0x3c), rgb(0xa3, 0xe6, 0x35)];
 
 // ---------- text grid ----------
 type Seg = Span<'static>;
@@ -68,6 +70,8 @@ fn keys(pairs: &[(&str, &str)]) -> Vec<Seg> {
         .collect()
 }
 
+const LOADING: &str = "···";
+
 /// A screen ready to draw.
 struct Screen {
     title: Vec<Seg>,
@@ -95,6 +99,25 @@ fn queue_name(q: &str) -> String {
     }
 }
 
+/// Each player's party marker, one color per party.
+fn party_marks(parties: &HashMap<String, String>) -> HashMap<String, Seg> {
+    let mut ids: Vec<&String> = parties.values().collect();
+    ids.sort();
+    ids.dedup();
+    let color: HashMap<&String, Color> = ids.into_iter().enumerate().map(|(i, id)| (id, PARTY[i % PARTY.len()])).collect();
+    parties.iter().map(|(p, id)| (p.clone(), s("■", fg(color[id])))).collect()
+}
+
+fn name_segs(m: &Model, puuid: &str) -> Vec<Seg> {
+    let name = m.players.get(puuid).and_then(|d| d.name.clone());
+    match (name, puuid == m.me) {
+        (Some((n, _)), true) => vec![s(n, you())],
+        (None, true) => vec![s("you", you())],
+        (Some((n, t)), false) => vec![s(n, text()), s(format!("#{t}"), dim())],
+        (None, false) => vec![s(LOADING, dim())],
+    }
+}
+
 // ---------- menus / waiting ----------
 fn waiting_screen(reason: &str) -> Screen {
     Screen {
@@ -113,12 +136,21 @@ fn menus_screen(m: &Model) -> Screen {
     let now = Utc::now();
     let mut rows = vec![blank()];
     let mut line = vec![s("   ", Style::new())];
-    line.push(s("you", you()));
+    line.extend(name_segs(m, &m.me));
     if let Some(l) = m.my_presence().and_then(|p| p.account_level) {
         line.push(s(format!("   level {l}"), dim()));
     }
     rows.push(line.into());
     rows.push(blank());
+    let party = party_marks(&m.parties());
+    let mut mates: Vec<&String> = party.keys().filter(|p| **p != m.me).collect();
+    // A HashMap's order changes from one frame to the next.
+    mates.sort();
+    for (i, mate) in mates.iter().enumerate() {
+        let mut r = vec![s(if i == 0 { "   Party      " } else { "              " }, dim()), party[*mate].clone(), s(" ", Style::new())];
+        r.extend(name_segs(m, mate));
+        rows.push(r.into());
+    }
     let p = m.my_presence();
     let queue = p.and_then(|p| p.queue_id.clone()).map(|q| queue_name(&q)).unwrap_or_else(|| "—".into());
     let status = match p.and_then(|p| p.party_state.clone()).as_deref() {
@@ -133,7 +165,12 @@ fn menus_screen(m: &Model) -> Screen {
     };
     rows.push(vec![s("   Status     ", dim()), s(status, text())].into());
     rows.push(blank());
-    Screen { title: vec![s("teamdiff", bold())], right: vec![s("● ", good()), s("online", dim())], rows, footer: keys(&[("q", "quit")]) }
+    Screen {
+        title: vec![s("teamdiff", bold())],
+        right: vec![s("● ", good()), s(m.region.clone(), dim())],
+        rows,
+        footer: keys(&[("q", "quit")]),
+    }
 }
 
 // ---------- frame ----------
