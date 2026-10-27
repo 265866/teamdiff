@@ -19,7 +19,8 @@
 # -s`, `git ls-tree -r <commit>` or `git show-ref` finds.
 #
 # Terms no pattern can catch, such as your own Riot ID, go one per line in `.privacy-denylist`,
-# which git ignores. CI reads the same list from the PRIVACY_DENYLIST secret.
+# which git ignores. CI reads the same list from the PRIVACY_DENYLIST secret, which exists twice:
+# as an Actions secret, and as a Dependabot secret for Dependabot's pull requests. Update both.
 set -euo pipefail
 
 # In a UTF-8 locale, a byte that isn't valid UTF-8 makes bash's `read` run on past a delimiter and

@@ -56,6 +56,9 @@ your friends', one per line in `.privacy-denylist`. Git ignores that file. Run
 `scripts/privacy-check.sh --history` before you push a branch, so data a later commit removed doesn't
 stay in an earlier one.
 
+CI reads the denylist from the `PRIVACY_DENYLIST` secret, which maintainers keep twice: as an Actions
+secret, and as a Dependabot secret for Dependabot's pull requests. Change both together.
+
 ## Riot's notices and assets
 
 Keep Riot's legal notices in the README and in `teamdiff --help`. The accolade icons in

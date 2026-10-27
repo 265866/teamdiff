@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Patch releases share one pull request. Minor and major releases each get their own, since a
+    # minor release of a 0.x crate can break the build.
+    groups:
+      patch:
+        patterns: ["*"]
+        update-types: [patch]
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Major releases get their own pull requests: one can change an action's inputs and shouldn't
+    # hold back the rest.
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ci
+      include: scope
