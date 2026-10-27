@@ -1,6 +1,7 @@
 //! `--demo`: a sample lobby for trying the UI without a live match. Tab cycles screens.
 
 use crate::content::Content;
+use crate::goldstars::{Accolade, Earned, MatchAccolades};
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Postgame, Side, Slot};
 use crate::presence::{LoopState, Presence};
 use crate::stats::{CompUpdate, MatchSummary, PlayerMatch, Record};
@@ -190,6 +191,22 @@ fn postgame(win: bool, lobby: Lobby) -> Postgame {
         }
         s.teams = HashMap::from([("Red".into(), (9, false)), ("Blue".into(), (13, true))]);
     }
+    use Accolade::*;
+    let earned: [(&str, &[Accolade]); 7] = [
+        ("omen", &[Mvp, Masterful, Headshots, Clutches, Trades]),
+        ("me", &[TopFrag, Kills, FirstBlood, Damage]),
+        ("sova", &[Assists, Trades]),
+        ("killjoy", &[Plants]),
+        ("raze", &[Aces, Kills]),
+        ("breach", &[Trades]),
+        ("clove", &[Clutches]),
+    ];
+    let players = earned
+        .iter()
+        .map(|(id, ks)| {
+            (id.to_string(), ks.iter().map(|k| (*k, Earned { value: 5.0, act_record: *id == "me" && *k == FirstBlood })).collect())
+        })
+        .collect();
     let rr = if win { 21 } else { -16 };
     Postgame {
         match_id: "demo-match".into(),
@@ -202,6 +219,7 @@ fn postgame(win: bool, lobby: Lobby) -> Postgame {
             tier_after: 19,
             rr_after: (47 + rr) as u32,
         }),
+        accolades: Some(MatchAccolades { start_ms: 1_000_000, players }),
         lobby: Some(lobby),
         shown_at: Some(Instant::now()),
     }
@@ -391,6 +409,8 @@ mod tests {
         assert!(omen < me, "sorted by Performance Score");
         assert!(s[omen].contains("MATCH MVP"));
         assert!(s.iter().any(|l| l.contains("Echo") && l.contains("TEAM MVP")));
+        assert!(s.iter().any(|l| l.contains("New act best") && l.contains("5 first bloods")));
+        assert!(s[me].contains("TFKLFBDM"), "accolades in a fixed order: {}", s[me]);
         assert!(s.iter().any(|l| l.contains("+21")));
     }
 
@@ -422,5 +442,14 @@ mod tests {
         let ui = UiState { view: View::Detail("cypher".into()), ..Default::default() };
         let incog = render(&m, &ui, WIDTH, 50).join("\n");
         assert!(!incog.contains("leaked"), "an incognito player's name never appears, even if known");
+    }
+
+    #[test]
+    fn legend_lists_every_accolade() {
+        let ui = UiState { legend: true, ..Default::default() };
+        let s = render(&model("victory"), &ui, WIDTH, 50).join("\n");
+        for k in Accolade::LISTED {
+            assert!(s.contains(k.name()), "{k:?}");
+        }
     }
 }

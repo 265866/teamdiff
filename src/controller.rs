@@ -1,5 +1,6 @@
 //! Network side: follows the game's state through presence and loads player data in the background.
 
+use crate::goldstars::{self, Definitions};
 use crate::local_files::browser_profile_dir;
 use crate::model::{Load, Lobby, Model, Phase, PlayerData, Postgame, parse_coregame, parse_pregame};
 use crate::presence::LoopState;
@@ -96,6 +97,9 @@ pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
             m.region = riot.log.region.to_uppercase();
             m.last_error = None;
             m.net = Some(riot.net.clone());
+        }
+        if let Ok(Some(v)) = riot.goldstar_defs().await {
+            lock(&shared).defs = Arc::new(Definitions::from_response(&v));
         }
         let mut session = Session::new(riot, tracker, shared.clone());
         loop {
@@ -428,7 +432,7 @@ fn private_or<T>(result: Result<T>) -> Result<Load<T>> {
     }
 }
 
-/// After a match: waits for its details and your RR change.
+/// After a match: waits for its details, your RR change and the accolades Riot awarded.
 async fn postgame(riot: Arc<Riot>, shared: Shared, match_id: String) {
     const POLL: Duration = Duration::from_secs(5);
     const ATTEMPTS: u32 = 120;
@@ -456,20 +460,29 @@ async fn postgame(riot: Arc<Riot>, shared: Shared, match_id: String) {
             p.shown_at = Some(Instant::now());
         }
     }
-    if summary.queue != "competitive" {
-        return;
-    }
+    let (mut rr_done, mut accolades_done) = (summary.queue != "competitive", false);
     for _ in 0..ATTEMPTS {
-        if !still_current(&shared) {
+        if !still_current(&shared) || (rr_done && accolades_done) {
             return;
         }
-        if let Ok(Some(v)) = riot.my_comp_updates(3).await
+        if !rr_done
+            && let Ok(Some(v)) = riot.my_comp_updates(3).await
             && let Some(u) = parse_comp_updates(&v).into_iter().find(|u| u.match_id == match_id)
         {
             if let Some(p) = lock(&shared).postgame.as_mut().filter(|p| p.match_id == match_id) {
                 p.rr = Some(u);
             }
-            return;
+            rr_done = true;
+        }
+        if !accolades_done && let Ok(Some(v)) = riot.player_goldstars().await {
+            let mut m = lock(&shared);
+            let parsed = goldstars::parse_player(&v, &m.defs);
+            if let Some(found) = parsed.match_near(summary.start_ms).cloned() {
+                if let Some(p) = m.postgame.as_mut().filter(|p| p.match_id == match_id) {
+                    p.accolades = Some(found);
+                }
+                accolades_done = true;
+            }
         }
         tokio::time::sleep(POLL).await;
     }

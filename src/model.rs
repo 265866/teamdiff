@@ -1,6 +1,7 @@
 //! Application state shared between the network task and the UI.
 
 use crate::content::Content;
+use crate::goldstars::{Definitions, MatchAccolades};
 use crate::presence::Presence;
 use crate::riot::NetStats;
 use crate::stats::{CompUpdate, MatchSummary, Record};
@@ -159,6 +160,7 @@ pub struct Postgame {
     pub match_id: String,
     pub summary: Option<Arc<MatchSummary>>,
     pub rr: Option<CompUpdate>,
+    pub accolades: Option<MatchAccolades>,
     /// The match's lobby, kept for incognito flags and parties.
     pub lobby: Option<Lobby>,
     /// When the banner first appeared, for the reveal animation.
@@ -171,6 +173,7 @@ pub struct Model {
     pub me: String,
     pub region: String,
     pub content: Arc<Content>,
+    pub defs: Arc<Definitions>,
     pub lobby: Option<Lobby>,
     pub players: HashMap<String, PlayerData>,
     /// The player whose details are open, so their older acts get loaded.
@@ -190,6 +193,7 @@ impl Model {
             me: String::new(),
             region: String::new(),
             content,
+            defs: Arc::default(),
             lobby: None,
             players: HashMap::new(),
             viewing: None,

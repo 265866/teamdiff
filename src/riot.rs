@@ -247,6 +247,14 @@ impl Riot {
             })
             .collect())
     }
+
+    pub async fn goldstar_defs(&self) -> Result<Option<Value>> {
+        self.get(Host::Pd, "/goldstars/v1/goldstars").await
+    }
+
+    pub async fn player_goldstars(&self) -> Result<Option<Value>> {
+        self.get(Host::Pd, &format!("/goldstars/v1/players/{}", self.puuid)).await
+    }
 }
 
 /// A request Riot refused with 429, or one not sent because its Retry-After hasn't ended.

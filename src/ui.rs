@@ -1,6 +1,7 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
 use crate::content::Content;
+use crate::goldstars::{Accolade, format_value};
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::riot::NetStats;
 use crate::stats::{MatchSummary, Record, RecordSource, pooled_kd_hs};
@@ -9,7 +10,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -209,6 +210,7 @@ pub enum View {
 pub struct UiState {
     pub view: View,
     pub cursor: usize,
+    pub legend: bool,
 }
 
 /// A screen ready to draw.
@@ -466,7 +468,12 @@ fn lobby_screen(m: &Model, ui: &UiState, pregame: bool) -> Screen {
             }
         }
     }
-    Screen { title: vec![s(title, bold())], right, rows, footer: keys(&[("↑↓", "select"), ("enter", "details"), ("q", "quit")]) }
+    Screen {
+        title: vec![s(title, bold())],
+        right,
+        rows,
+        footer: keys(&[("↑↓", "select"), ("enter", "details"), ("?", "legend"), ("q", "quit")]),
+    }
 }
 
 // ---------- menus / waiting ----------
@@ -561,7 +568,7 @@ fn menus_screen(m: &Model) -> Screen {
         title: vec![s("teamdiff", bold())],
         right: vec![s("● ", good()), s(m.region.clone(), dim())],
         rows,
-        footer: keys(&[("enter", "profile"), ("q", "quit")]),
+        footer: keys(&[("enter", "profile"), ("?", "legend"), ("q", "quit")]),
     }
 }
 
@@ -653,6 +660,7 @@ fn pg_cols() -> Vec<Col> {
         col("HS%", 4, true),
         col("FB", 3, true),
         col("", 9, false),
+        col("ACCOLADES", 22, false),
     ]
 }
 
@@ -665,7 +673,7 @@ fn postgame_order(m: &Model, summary: &MatchSummary) -> Vec<(String, String)> {
 }
 
 fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
-    let footer = keys(&[("↑↓", "select"), ("enter", "details"), ("q", "quit")]);
+    let footer = keys(&[("↑↓", "select"), ("enter", "details"), ("?", "legend"), ("q", "quit")]);
     let Some(pg) = m.postgame.as_ref() else { return menus_screen(m) };
     let Some(summary) = pg.summary.as_ref() else {
         return Screen {
@@ -712,7 +720,20 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
             s(format!("  {:+}", u.rr_earned), bar_style.add_modifier(Modifier::BOLD)),
         ]));
     }
+    let mine = pg.accolades.as_ref().and_then(|a| a.players.get(&m.me));
+    let bests: Vec<String> = Accolade::ALL
+        .iter()
+        .filter_map(|k| {
+            mine.and_then(|e| e.get(k))
+                .filter(|e| e.act_record)
+                .map(|e| format!("{} {}", format_value(*k, e.value), k.name().to_lowercase()))
+        })
+        .collect();
     rows.push(blank());
+    if !bests.is_empty() {
+        rows.push(center(vec![s("New act best  ", gold()), s(bests.join(" · "), bold())]));
+        rows.push(blank());
+    }
 
     let cols = pg_cols();
     let mvp = summary.mvp().map(|p| p.puuid.clone());
@@ -743,6 +764,9 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
             None
         };
         let diff = p.kills as i64 - p.deaths as i64;
+        let earned = pg.accolades.as_ref().and_then(|a| a.players.get(puuid));
+        let acc: Vec<Seg> =
+            Accolade::LISTED.iter().filter(|k| earned.is_some_and(|e| e.contains_key(k))).map(|k| s(k.abbrev(), dim())).collect();
         let perf = p.performance.map(|v| v.round().to_string()).unwrap_or_else(|| "—".into());
         let cells = vec![
             vec![s(if cursor_id.as_deref() == Some(puuid.as_str()) { "▸" } else { " " }, ally())],
@@ -768,6 +792,7 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
             vec![s(p.hs_pct().map(|h| format!("{h}%")).unwrap_or_else(|| "—".into()), text())],
             vec![s(p.first_kills.to_string(), text())],
             vec![s(label.unwrap_or(""), gold())],
+            acc,
         ];
         let mut row = join(&cols, cells);
         if cursor_id.as_deref() == Some(puuid.as_str()) {
@@ -960,7 +985,7 @@ fn detail_screen(m: &Model, puuid: &str) -> Screen {
     }
     rows.push(blank());
     rows.extend(recent_rows(m, &d));
-    Screen { title: vec![s(title, bold())], right: Vec::new(), rows, footer: keys(&[("esc", "back"), ("q", "quit")]) }
+    Screen { title: vec![s(title, bold())], right: Vec::new(), rows, footer: keys(&[("esc", "back"), ("?", "legend"), ("q", "quit")]) }
 }
 
 // ---------- frame ----------
@@ -1005,13 +1030,43 @@ fn too_small(f: &mut Frame, need_w: u16, need_h: u16) {
     f.render_widget(p, rect);
 }
 
+const LEGEND_HEIGHT: u16 = Accolade::LISTED.len() as u16 + 4;
+
+fn legend(f: &mut Frame, origin: Rect) {
+    let h = LEGEND_HEIGHT;
+    let w = 30u16;
+    let rect = Rect {
+        x: origin.x + (origin.width.saturating_sub(w)) / 2,
+        y: origin.y + (origin.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    let lines: Vec<Line> = std::iter::once(Line::default())
+        .chain(
+            Accolade::LISTED
+                .iter()
+                .map(|k| Line::from(vec![s("   ", Style::new()), s(k.abbrev(), dim()), s(format!("  {}", k.name()), text())])),
+        )
+        .collect();
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .border_style(border())
+                .title(Line::from(vec![s("─ ", border()), s("ACCOLADES", bold()), s(" ", border())]))
+                .title_bottom(Line::from(keys(&[("esc", "close")]))),
+        ),
+        rect,
+    );
+}
+
 pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
     let sc = screen(m, ui);
     let status = match &m.last_error {
         Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
         _ => net_status(m.net.as_deref()),
     };
-    let need_h = sc.rows.len() as u16 + 2;
+    let need_h = (sc.rows.len() as u16 + 2).max(if ui.legend { LEGEND_HEIGHT } else { 0 });
     let area = f.area();
     if area.width < WIDTH || area.height < need_h {
         too_small(f, WIDTH, need_h);
@@ -1041,6 +1096,9 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines).style(text()).block(block), rect);
+    if ui.legend {
+        legend(f, rect);
+    }
 }
 
 /// True when the screen animates and needs frequent redraws.

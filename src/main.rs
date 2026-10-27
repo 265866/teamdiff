@@ -2,6 +2,7 @@ mod browser;
 mod content;
 mod controller;
 mod demo;
+mod goldstars;
 mod local_files;
 mod model;
 mod presence;
@@ -31,7 +32,7 @@ OPTIONS:
     -h, --help     Show this help
 
 KEYS:
-    up/down  select a player     enter  details
+    up/down  select a player     enter  details     ?  accolade legend
     esc      back                q      quit
 
 teamdiff isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
@@ -134,6 +135,8 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                KeyCode::Char('?') => ui.legend = !ui.legend,
+                KeyCode::Esc if ui.legend => ui.legend = false,
                 KeyCode::Esc => {
                     ui.view = View::Main;
                     controller::lock(&shared).viewing = None;
