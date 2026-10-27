@@ -1,7 +1,7 @@
 //! Application state shared between the network task and the UI.
 
 use crate::content::Content;
-use crate::goldstars::{Definitions, MatchAccolades};
+use crate::goldstars::{Definitions, MatchAccolades, PlayerGoldstars};
 use crate::presence::Presence;
 use crate::riot::NetStats;
 use crate::stats::{CompUpdate, MatchSummary, Record};
@@ -181,6 +181,7 @@ pub struct Model {
     /// Latest presence per player.
     pub presences: HashMap<String, Presence>,
     pub postgame: Option<Postgame>,
+    pub my_goldstars: Option<PlayerGoldstars>,
     /// The latest request failure and when it happened; shown briefly in the footer.
     pub last_error: Option<(String, Instant)>,
     pub net: Option<Arc<NetStats>>,
@@ -199,6 +200,7 @@ impl Model {
             viewing: None,
             presences: HashMap::new(),
             postgame: None,
+            my_goldstars: None,
             last_error: None,
             net: None,
         }

@@ -1,8 +1,9 @@
 //! Accolades, which Riot calls "goldstars".
 //!
-//! `/goldstars/v1/players/{puuid}` uses obfuscated keys that have changed between versions: `tempM`
-//! holds recent matches (`tempG` start time, `tempP` per player, `tempA` per accolade with `tempV`
-//! value and `tempB` act-record flag).
+//! `/goldstars/v1/players/{puuid}` uses obfuscated keys that have changed between versions:
+//! `tempS` act summaries (`tempA` per accolade with `tempC` count and `tempB` best), and `tempM` recent
+//! matches (`tempG` start time, `tempP` per player, `tempA` per accolade with `tempV` value and `tempB`
+//! act-record flag). The all-zero act id is the all-time summary.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -149,6 +150,12 @@ impl Definitions {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Summary {
+    pub count: u32,
+    pub best: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Earned {
     pub value: f64,
@@ -163,11 +170,24 @@ pub struct MatchAccolades {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PlayerGoldstars {
+    /// act id (lowercase) -> accolade -> summary. The all-zero id is all-time.
+    pub acts: HashMap<String, HashMap<Accolade, Summary>>,
     pub matches: Vec<MatchAccolades>,
 }
 
+pub const ALL_TIME: &str = "00000000-0000-0000-0000-000000000000";
+
 pub fn parse_player(v: &Value, defs: &Definitions) -> PlayerGoldstars {
     let mut out = PlayerGoldstars::default();
+    for (act, s) in v["tempS"].as_object().into_iter().flatten() {
+        let mut m = HashMap::new();
+        for (id, a) in s["tempA"].as_object().into_iter().flatten() {
+            if let Some(kind) = defs.kind(a["id"].as_str().unwrap_or(id)) {
+                m.insert(kind, Summary { count: a["tempC"].as_u64().unwrap_or(0) as u32, best: a["tempB"].as_f64().unwrap_or(0.0) });
+            }
+        }
+        out.acts.insert(act.to_lowercase(), m);
+    }
     for g in v["tempM"].as_array().into_iter().flatten() {
         let mut players = HashMap::new();
         for (puuid, p) in g["tempP"].as_object().into_iter().flatten() {
@@ -210,11 +230,16 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const TOP_FRAG: &str = "1c926cba-48cb-8aeb-c68d-a1ba2d012784";
     const FIRST_BLOOD: &str = "BFE96C47-44D0-E473-585D-749146D2D05E";
 
     fn body() -> Value {
         json!({
             "puuid": "me", "version": 32,
+            "tempS": {
+                "A6": { "tempS": "A6", "tempA": { TOP_FRAG: { "id": TOP_FRAG, "tempC": 11, "tempB": 31.0 } } },
+                ALL_TIME: { "tempA": { FIRST_BLOOD: { "id": FIRST_BLOOD, "tempC": 10, "tempB": 7.0 } } }
+            },
             "tempM": [
                 { "id": "", "tempG": 1_000_000, "tempP": {
                     "ME": { "tempA": { FIRST_BLOOD: { "id": FIRST_BLOOD, "tempV": 5.000001, "tempB": true } } },
@@ -226,9 +251,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_matches() {
+    fn parses_summaries_and_matches() {
         let defs = Definitions::from_response(&json!([{ "id": "NEW-ID", "tempT": "Clutches" }]));
         let g = parse_player(&body(), &defs);
+        assert_eq!(g.acts["a6"][&Accolade::TopFrag], Summary { count: 11, best: 31.0 });
+        assert_eq!(g.acts[ALL_TIME][&Accolade::FirstBlood].count, 10);
         let m = g.match_near(1_000_000 + 4 * 60 * 1000).unwrap();
         let mine = &m.players["me"];
         assert!(mine[&Accolade::FirstBlood].act_record);
@@ -245,7 +272,7 @@ mod tests {
 
     #[test]
     fn empty_and_malformed_bodies() {
-        assert_eq!(parse_player(&json!({ "tempM": [] }), &Definitions::default()), PlayerGoldstars::default());
+        assert_eq!(parse_player(&json!({ "tempS": {}, "tempM": [] }), &Definitions::default()), PlayerGoldstars::default());
         assert_eq!(parse_player(&json!("nope"), &Definitions::default()), PlayerGoldstars::default());
     }
 

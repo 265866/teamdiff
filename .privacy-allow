@@ -3,6 +3,7 @@
 # uuid <value>          a public game-content id, as valorant-api.com and the game files list it
 # binary <path> <sha256> a binary file, such as an image, someone has checked holds no personal data
 
+uuid 00000000-0000-0000-0000-000000000000  # the all-time accolade summary
 uuid add6443a-41bd-e414-f6ad-e58d267f4e95  # agent: Jett
 uuid 7eaecc1b-4337-bbf6-6ab9-04b8f06b3319  # map: Ascent
 uuid 745b27f0-4bc2-13a4-4ee7-77be323155c2  # accolade: MVP

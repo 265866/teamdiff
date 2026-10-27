@@ -1,7 +1,7 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
 use crate::content::Content;
-use crate::goldstars::{Accolade, format_value};
+use crate::goldstars::{ALL_TIME, Accolade, format_value};
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::riot::NetStats;
 use crate::stats::{MatchSummary, Record, RecordSource, pooled_kd_hs};
@@ -927,6 +927,42 @@ fn recent_rows(m: &Model, d: &PlayerData) -> Vec<Row> {
     rows
 }
 
+fn accolade_rows(m: &Model) -> Vec<Row> {
+    let mut rows: Vec<Row> = vec![
+        vec![s("ACCOLADES", bold())].into(),
+        vec![s(format!("{:17}{:<14}ALL-TIME", "", "THIS ACT"), dim())].into(),
+        vec![s(format!("{:17}times best    times best", ""), dim())].into(),
+    ];
+    let Some(g) = &m.my_goldstars else {
+        rows.push(vec![s(format!("  {LOADING}"), dim())].into());
+        return rows;
+    };
+    let act = act_ids(m).0.unwrap_or_default();
+    let latest = g.matches.iter().filter(|x| x.players.contains_key(&m.me)).max_by_key(|x| x.start_ms).and_then(|x| x.players.get(&m.me));
+    for k in Accolade::ALL {
+        let a = g.acts.get(&act).and_then(|x| x.get(&k)).copied().unwrap_or_default();
+        let t = g.acts.get(ALL_TIME).and_then(|x| x.get(&k)).copied().unwrap_or_default();
+        let fresh = latest.and_then(|e| e.get(&k)).is_some_and(|e| e.act_record);
+        let best = |c: u32, b: f64| if c == 0 { "—".to_string() } else { format_value(k, b) };
+        rows.push(Row {
+            segs: vec![
+                s("  ", Style::new()),
+                s(k.abbrev(), dim()),
+                s(format!(" {:<12}", k.name()), text()),
+                s(format!("{:>5}", format!("{}×", a.count)), bold()),
+                s(" ", Style::new()),
+                s(format!("{:>4}", best(a.count, a.best)), if fresh { gold() } else { text() }),
+                if fresh { s(" new", gold()) } else { s("    ", Style::new()) },
+                s(format!("{:>5}", format!("{}×", t.count)), bold()),
+                s(" ", Style::new()),
+                s(format!("{:>4}", best(t.count, t.best)), text()),
+            ],
+            bg: None,
+        });
+    }
+    rows
+}
+
 fn detail_screen(m: &Model, puuid: &str) -> Screen {
     let content = &m.content;
     let lobby = m.lobby.as_ref().or(m.postgame.as_ref().and_then(|p| p.lobby.as_ref()));
@@ -976,7 +1012,14 @@ fn detail_screen(m: &Model, puuid: &str) -> Screen {
         }
     }
     let map = m.lobby.as_ref().map(|l| content.map(&l.map_url));
-    let (left, right) = (act_rows(m, &d), map_rows(&d, map.as_deref()));
+    let mut left = act_rows(m, &d);
+    let right = if puuid == m.me {
+        left.push(blank());
+        left.extend(map_rows(&d, map.as_deref()));
+        accolade_rows(m)
+    } else {
+        map_rows(&d, map.as_deref())
+    };
     let mut rows = vec![head.into(), blank()];
     let n = left.len().max(right.len());
     let (mut left, mut right) = (left.into_iter(), right.into_iter());

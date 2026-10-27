@@ -10,6 +10,7 @@ use crate::tracker::{self, Tracker, riot_id_path};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -128,6 +129,7 @@ struct Session {
     named: Claims,
     /// Players whose older acts were loaded for their details.
     history: Claims,
+    goldstars_requested: Arc<AtomicBool>,
     client_gone: bool,
 }
 
@@ -143,6 +145,7 @@ impl Session {
             requested: Claims::default(),
             named: Claims::default(),
             history: Claims::default(),
+            goldstars_requested: Arc::default(),
             client_gone: false,
         }
     }
@@ -199,6 +202,7 @@ impl Session {
         for p in party {
             self.load_player(p);
         }
+        self.load_my_goldstars();
     }
 
     async fn pregame(&mut self) -> Result<()> {
@@ -337,6 +341,27 @@ impl Session {
         });
     }
 
+    fn load_my_goldstars(&mut self) {
+        if self.goldstars_requested.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let (riot, shared, requested) = (self.riot.clone(), self.shared.clone(), self.goldstars_requested.clone());
+        tokio::spawn(async move {
+            match riot.player_goldstars().await {
+                Ok(v) => {
+                    let mut m = lock(&shared);
+                    let parsed = v.map(|v| goldstars::parse_player(&v, &m.defs)).unwrap_or_default();
+                    m.my_goldstars = Some(parsed);
+                }
+                Err(e) => {
+                    report(&shared, &e);
+                    tokio::time::sleep(RETRY_AFTER).await;
+                    requested.store(false, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+
     fn start_postgame(&mut self, match_id: String) {
         let party: Vec<String> = {
             let mut m = lock(&self.shared);
@@ -347,6 +372,7 @@ impl Session {
             let mates = m.presences.values().filter(|p| p.party_id.is_some() && p.party_id == my_party).map(|p| p.puuid.clone());
             std::iter::once(m.me.clone()).chain(mates).collect()
         };
+        self.goldstars_requested.store(false, Ordering::Relaxed);
         tokio::spawn(postgame(self.riot.clone(), self.shared.clone(), match_id.clone()));
         // Your stats change with this match; the menus reload you and your party once tracker.gg has it.
         tokio::spawn(refresh_after_match(self.shared.clone(), self.requested.clone(), party, match_id, REFRESH_AFTER_MATCH));
@@ -483,6 +509,7 @@ async fn postgame(riot: Arc<Riot>, shared: Shared, match_id: String) {
                 }
                 accolades_done = true;
             }
+            m.my_goldstars = Some(parsed);
         }
         tokio::time::sleep(POLL).await;
     }

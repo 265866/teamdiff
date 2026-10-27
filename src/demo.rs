@@ -1,7 +1,7 @@
 //! `--demo`: a sample lobby for trying the UI without a live match. Tab cycles screens.
 
 use crate::content::Content;
-use crate::goldstars::{Accolade, Earned, MatchAccolades};
+use crate::goldstars::{ALL_TIME, Accolade, Earned, MatchAccolades, PlayerGoldstars, Summary};
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Postgame, Side, Slot};
 use crate::presence::{LoopState, Presence};
 use crate::stats::{CompUpdate, MatchSummary, PlayerMatch, Record};
@@ -225,6 +225,31 @@ fn postgame(win: bool, lobby: Lobby) -> Postgame {
     }
 }
 
+fn goldstars() -> PlayerGoldstars {
+    use Accolade::*;
+    let rows: [(Accolade, u32, f64, u32, f64); 12] = [
+        (Mvp, 6, 461.0, 6, 461.0),
+        (Masterful, 9, 461.0, 9, 461.0),
+        (TopFrag, 11, 31.0, 11, 31.0),
+        (Kills, 14, 31.0, 16, 31.0),
+        (FirstBlood, 8, 5.0, 10, 7.0),
+        (Damage, 7, 211.0, 9, 211.0),
+        (Headshots, 5, 41.0, 7, 44.0),
+        (Assists, 3, 14.0, 4, 16.0),
+        (Plants, 4, 5.0, 5, 6.0),
+        (Aces, 1, 1.0, 1, 1.0),
+        (Clutches, 4, 2.0, 5, 2.0),
+        (Trades, 6, 9.0, 7, 9.0),
+    ];
+    let act = rows.iter().map(|r| (r.0, Summary { count: r.1, best: r.2 })).collect();
+    let all = rows.iter().map(|r| (r.0, Summary { count: r.3, best: r.4 })).collect();
+    let last = MatchAccolades {
+        start_ms: 1,
+        players: HashMap::from([("me".into(), HashMap::from([(FirstBlood, Earned { value: 5.0, act_record: true })]))]),
+    };
+    PlayerGoldstars { acts: HashMap::from([("a6".into(), act), (ALL_TIME.into(), all)]), matches: vec![last] }
+}
+
 /// The demo model for one of [`SCREENS`].
 pub fn model(screen: &str) -> Model {
     let mut m = Model::new(Arc::new(content()));
@@ -279,6 +304,7 @@ pub fn model(screen: &str) -> Model {
             );
         }
     }
+    m.my_goldstars = Some(goldstars());
     m.phase = match screen {
         "waiting" => Phase::Waiting("Riot Client is not running".into()),
         "menus" => Phase::Menus,
@@ -433,10 +459,15 @@ mod tests {
     }
 
     #[test]
-    fn details_show_act_history_maps_and_recent_matches() {
+    fn profile_shows_accolades_only_for_you() {
         let mut m = model("in-game");
+        let ui = UiState { view: View::Detail("me".into()), ..Default::default() };
+        let mine = render(&m, &ui, WIDTH, 50).join("\n");
+        assert!(mine.contains("ACCOLADES") && mine.contains("Masterful"));
+        assert!(mine.contains("5 new"));
         let ui = UiState { view: View::Detail("raze".into()), ..Default::default() };
         let theirs = render(&m, &ui, WIDTH, 50).join("\n");
+        assert!(!theirs.contains("ACCOLADES"));
         assert!(theirs.contains("ACT HISTORY") && theirs.contains("MAPS THIS ACT") && theirs.contains("RECENT MATCHES"));
         m.players.get_mut("cypher").unwrap().name = Some(("leaked".into(), "1".into()));
         let ui = UiState { view: View::Detail("cypher".into()), ..Default::default() };
