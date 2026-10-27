@@ -3,5 +3,31 @@
 # uuid <value>          a public game-content id, as valorant-api.com and the game files list it
 # binary <path> <sha256> a binary file, such as an image, someone has checked holds no personal data
 
+uuid 00000000-0000-0000-0000-000000000000  # the all-time accolade summary
 uuid add6443a-41bd-e414-f6ad-e58d267f4e95  # agent: Jett
 uuid 7eaecc1b-4337-bbf6-6ab9-04b8f06b3319  # map: Ascent
+uuid 745b27f0-4bc2-13a4-4ee7-77be323155c2  # accolade: MVP
+uuid 4815a8a2-4649-9bfe-afd2-38ae9cc22898  # accolade: Masterful
+uuid 1c926cba-48cb-8aeb-c68d-a1ba2d012784  # accolade: Top Frag
+uuid 1b13755f-4d5a-2c9e-6a39-bea7e6c53e7f  # accolade: Kills
+uuid bfe96c47-44d0-e473-585d-749146d2d05e  # accolade: First Bloods
+uuid 6dc31cfd-41da-895f-9246-a8b63558cdb8  # accolade: Damage
+uuid 2c8b6129-4384-230d-c7e5-cda12019533c  # accolade: Headshots
+uuid e43f9acb-448c-4aa1-1591-6db72c0b8dae  # accolade: Assists
+uuid 352a3ac8-4b2c-db6a-1f36-c0a67b428e65  # accolade: Spike Plants
+uuid 244cf4ab-4c27-cc59-3323-c985858d6ddb  # accolade: Aces
+uuid 0497d585-42ad-61a7-42bc-189571f40e2c  # accolade: Clutches
+uuid 3bc0563a-4fe9-a15c-0078-23a3408d64b5  # accolade: Trades
+
+binary assets/accolades/aces.png 8d5deacca35f4dd255c07b5654704fe57552de3cc348425bb61e09c3466135b9  # accolade icon from the game files
+binary assets/accolades/assists.png 23ee99ff1006378306b8b7aa2bda718f9e37944a827ff4d9b0c59bdbd18d08f8  # accolade icon from the game files
+binary assets/accolades/clutches.png 7e66a048a5f5ebc4469149c09fa81101a537867c8e23c91abe34b0b5019f1098  # accolade icon from the game files
+binary assets/accolades/damage.png 1c785a002b5db5e6e559b3d860d8cdd661209f6e8b178491d510562d83b8effe  # accolade icon from the game files
+binary assets/accolades/distinction.png 3eb490ecf21f42cda6817b6bf982912637fb2740d2954d66c34f921d35c45c65  # accolade icon from the game files
+binary assets/accolades/first-blood.png bccc216412fce94f78ee2b093db9bd636d46b125f339ada74227f3cd7934c748  # accolade icon from the game files
+binary assets/accolades/headshot-percentage.png 31be3367146d1fe570dc0c639d5f6c3c2a483fc16ec4ec79a13fd94225b8f644  # accolade icon from the game files
+binary assets/accolades/kills.png 2433ca54156a0422a4b0fd8c49bc867feeea6205f131547562e08e47a2777a8c  # accolade icon from the game files
+binary assets/accolades/mvp.png 823d59c2d72b402e130405b0270adc3573a10e279710ecaec04c4338ce318df9  # accolade icon from the game files
+binary assets/accolades/plants.png 094b188c5204c1280abf7bb0320db093469ba25570ce5dfd8627b3d95d9a4360  # accolade icon from the game files
+binary assets/accolades/top-frag.png 363534cbdb42081da099b5cede5a1ff90f422d3c055ac950ded6386fea2f6fea  # accolade icon from the game files
+binary assets/accolades/trades.png 8345926f3d404e7edbca9383e9fca1f7aa579fef5b0499e58743b53ddf90caa7  # accolade icon from the game files

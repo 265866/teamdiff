@@ -385,6 +385,7 @@ pub fn parse_matches(v: &Value, count: usize) -> Vec<RecentMatch> {
                     bodyshots: n("dealtBodyshots"),
                     legshots: n("dealtLegshots"),
                     performance: st["performance"]["value"].as_f64(),
+                    ..Default::default()
                 },
             })
         })

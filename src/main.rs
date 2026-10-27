@@ -2,6 +2,8 @@ mod browser;
 mod content;
 mod controller;
 mod demo;
+mod goldstars;
+mod icons;
 mod local_files;
 mod model;
 mod presence;
@@ -27,11 +29,11 @@ USAGE:
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
     --demo         Show sample data instead of connecting; Tab cycles screens
-                   (waiting, menus, agent-select, loading, in-game)
+                   (waiting, menus, agent-select, loading, in-game, victory, defeat)
     -h, --help     Show this help
 
 KEYS:
-    up/down  select a player     enter  details
+    up/down  select a player     enter  details     ?  accolade legend
     esc      back                q      quit
 
 teamdiff isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
@@ -104,13 +106,21 @@ async fn main() -> Result<()> {
     run_ui(shared, demo_screen)
 }
 
+/// Whether the terminal is one that answers the graphics query. One that doesn't would stall startup
+/// for two seconds and swallow the next keypress, so every other terminal keeps the text labels.
+fn asks_for_images() -> bool {
+    std::env::var_os("WT_SESSION").is_some() || std::env::var("TERM_PROGRAM").is_ok_and(|t| t == "WezTerm" || t == "vscode")
+}
+
 fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<()> {
     let mut terminal = ratatui::init();
+    let picker = asks_for_images().then(|| ratatui_image::picker::Picker::from_query_stdio().ok()).flatten();
+    let icons = icons::Icons::new(picker.as_ref());
     let mut ui = UiState::default();
     let mut last_phase = None;
     let result = (|| -> Result<()> {
         loop {
-            {
+            let animating = {
                 let mut m = controller::lock(&shared);
                 if last_phase.as_ref() != Some(&m.phase) {
                     // A new phase shows other players, so a details view from the last one closes.
@@ -119,9 +129,11 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
                     m.viewing = None;
                     last_phase = Some(m.phase.clone());
                 }
-                terminal.draw(|f| ui::draw(f, &m, &ui))?;
-            }
-            if !event::poll(Duration::from_millis(250))? {
+                terminal.draw(|f| ui::draw(f, &m, &ui, &icons))?;
+                ui::animating(&m)
+            };
+            let wait = Duration::from_millis(if animating { 50 } else { 250 });
+            if !event::poll(wait)? {
                 continue;
             }
             let Event::Key(key) = event::read()? else { continue };
@@ -132,6 +144,8 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                KeyCode::Char('?') => ui.legend = !ui.legend,
+                KeyCode::Esc if ui.legend => ui.legend = false,
                 KeyCode::Esc => {
                     ui.view = View::Main;
                     controller::lock(&shared).viewing = None;

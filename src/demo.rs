@@ -1,18 +1,20 @@
 //! `--demo`: a sample lobby for trying the UI without a live match. Tab cycles screens.
 
 use crate::content::Content;
-use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
+use crate::goldstars::{ALL_TIME, Accolade, Earned, MatchAccolades, PlayerGoldstars, Summary};
+use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Postgame, Side, Slot};
 use crate::presence::{LoopState, Presence};
-use crate::stats::{PlayerMatch, Record};
+use crate::stats::{CompUpdate, MatchSummary, PlayerMatch, Record};
 use crate::tracker::{ActStats, Profile, RecentMatch};
 use chrono::{Duration as Days, Utc};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const ASCENT: &str = "/Game/Maps/Ascent/Ascent";
 
-pub const SCREENS: [&str; 5] = ["waiting", "menus", "agent-select", "loading", "in-game"];
+pub const SCREENS: [&str; 7] = ["waiting", "menus", "agent-select", "loading", "in-game", "victory", "defeat"];
 
 fn content() -> Content {
     let agents: Vec<Value> = ["Jett", "Sova", "Killjoy", "Omen", "Sage", "Raze", "Breach", "Clove", "Cypher", "Neon"]
@@ -84,6 +86,19 @@ fn roster() -> Vec<P> {
     ]
 }
 
+fn summary(id: &str, map: &str, players: Vec<PlayerMatch>, score: (u32, u32), start_ms: i64) -> MatchSummary {
+    MatchSummary {
+        match_id: id.into(),
+        map_url: format!("/Game/Maps/{map}/{map}"),
+        queue: "competitive".into(),
+        start_ms,
+        length_ms: 34 * 60_000 + 12_000,
+        teams: HashMap::from([("Blue".into(), (score.0, score.0 > score.1)), ("Red".into(), (score.1, score.1 > score.0))]),
+        players,
+        ..Default::default()
+    }
+}
+
 fn player_data(p: &P) -> PlayerData {
     // Like tracker.gg: the latest act played, and unranked until a game this act.
     let acts = vec![ActStats { act_id: p.act.2.into(), tier: p.tier, record: Record { wins: p.act.0, losses: p.act.1 } }];
@@ -129,6 +144,110 @@ fn player_data(p: &P) -> PlayerData {
         recent: Load::Ready(recent),
         history,
     }
+}
+
+/// (player, team, performance, score, kills, deaths, assists, damage, headshot %, first bloods)
+type StatRow = (&'static str, &'static str, f64, u32, u32, u32, u32, u32, u32, u32);
+
+fn postgame(win: bool, lobby: Lobby) -> Postgame {
+    let stats: [StatRow; 10] = [
+        ("omen", "Blue", 431.0, 5764, 20, 11, 8, 3630, 30, 3),
+        ("me", "Blue", 338.0, 6314, 24, 15, 6, 3916, 27, 5),
+        ("sova", "Blue", 281.0, 4422, 15, 14, 11, 3102, 19, 2),
+        ("killjoy", "Blue", 247.0, 4136, 14, 13, 5, 2838, 22, 1),
+        ("sage", "Blue", 213.0, 2640, 8, 16, 12, 1870, 14, 0),
+        ("raze", "Red", 331.0, 5830, 22, 17, 4, 3696, 26, 4),
+        ("breach", "Red", 268.0, 3476, 11, 17, 13, 2420, 18, 1),
+        ("clove", "Red", 254.0, 4180, 15, 16, 7, 2860, 22, 2),
+        ("neon", "Red", 229.0, 3784, 14, 18, 3, 2662, 23, 2),
+        ("cypher", "Red", 188.0, 3080, 10, 16, 6, 2112, 20, 0),
+    ];
+    let parties = HashMap::from([("me", "x"), ("sova", "x"), ("raze", "y"), ("breach", "y"), ("clove", "z"), ("cypher", "z")]);
+    let agent = |id: &str| roster().into_iter().find(|p| p.id == id).map(|p| p.agent).unwrap_or("jett");
+    let players = stats
+        .iter()
+        .map(|&(id, team, perf, score, k, d, a, dmg, hs, fb)| PlayerMatch {
+            puuid: id.into(),
+            team: team.into(),
+            agent_id: agent(id).into(),
+            party_id: parties.get(id).map(|p| p.to_string()).unwrap_or_default(),
+            kills: k,
+            deaths: d,
+            assists: a,
+            score,
+            rounds: 22,
+            damage: dmg,
+            headshots: hs,
+            bodyshots: 100 - hs,
+            first_kills: fb,
+            performance: Some(perf),
+            ..Default::default()
+        })
+        .collect();
+    let mut s = summary("demo-match", "Ascent", players, if win { (13, 9) } else { (9, 13) }, 1_000_000);
+    if !win {
+        for p in &mut s.players {
+            p.team = if p.team == "Blue" { "Red".into() } else { "Blue".into() };
+        }
+        s.teams = HashMap::from([("Red".into(), (9, false)), ("Blue".into(), (13, true))]);
+    }
+    use Accolade::*;
+    let earned: [(&str, &[Accolade]); 7] = [
+        ("omen", &[Mvp, Masterful, Headshots, Clutches, Trades]),
+        ("me", &[TopFrag, Kills, FirstBlood, Damage]),
+        ("sova", &[Assists, Trades]),
+        ("killjoy", &[Plants]),
+        ("raze", &[Aces, Kills]),
+        ("breach", &[Trades]),
+        ("clove", &[Clutches]),
+    ];
+    let players = earned
+        .iter()
+        .map(|(id, ks)| {
+            (id.to_string(), ks.iter().map(|k| (*k, Earned { value: 5.0, act_record: *id == "me" && *k == FirstBlood })).collect())
+        })
+        .collect();
+    let rr = if win { 21 } else { -16 };
+    Postgame {
+        match_id: "demo-match".into(),
+        summary: Some(Arc::new(s)),
+        rr: Some(CompUpdate {
+            match_id: "demo-match".into(),
+            map_url: ASCENT.into(),
+            act_id: "a6".into(),
+            rr_earned: rr,
+            tier_after: 19,
+            rr_after: (47 + rr) as u32,
+        }),
+        accolades: Some(MatchAccolades { start_ms: 1_000_000, players }),
+        lobby: Some(lobby),
+        shown_at: Some(Instant::now()),
+    }
+}
+
+fn goldstars() -> PlayerGoldstars {
+    use Accolade::*;
+    let rows: [(Accolade, u32, f64, u32, f64); 12] = [
+        (Mvp, 6, 461.0, 6, 461.0),
+        (Masterful, 9, 461.0, 9, 461.0),
+        (TopFrag, 11, 31.0, 11, 31.0),
+        (Kills, 14, 31.0, 16, 31.0),
+        (FirstBlood, 8, 5.0, 10, 7.0),
+        (Damage, 7, 211.0, 9, 211.0),
+        (Headshots, 5, 41.0, 7, 44.0),
+        (Assists, 3, 14.0, 4, 16.0),
+        (Plants, 4, 5.0, 5, 6.0),
+        (Aces, 1, 1.0, 1, 1.0),
+        (Clutches, 4, 2.0, 5, 2.0),
+        (Trades, 6, 9.0, 7, 9.0),
+    ];
+    let act = rows.iter().map(|r| (r.0, Summary { count: r.1, best: r.2 })).collect();
+    let all = rows.iter().map(|r| (r.0, Summary { count: r.3, best: r.4 })).collect();
+    let last = MatchAccolades {
+        start_ms: 1,
+        players: HashMap::from([("me".into(), HashMap::from([(FirstBlood, Earned { value: 5.0, act_record: true })]))]),
+    };
+    PlayerGoldstars { acts: HashMap::from([("a6".into(), act), (ALL_TIME.into(), all)]), matches: vec![last] }
 }
 
 /// The demo model for one of [`SCREENS`].
@@ -185,14 +304,18 @@ pub fn model(screen: &str) -> Model {
             );
         }
     }
+    m.my_goldstars = Some(goldstars());
     m.phase = match screen {
         "waiting" => Phase::Waiting("Riot Client is not running".into()),
         "menus" => Phase::Menus,
         "agent-select" => Phase::Pregame,
-        _ => Phase::Ingame,
+        "loading" | "in-game" => Phase::Ingame,
+        _ => Phase::Postgame,
     };
-    if !matches!(screen, "menus" | "waiting") {
-        m.lobby = Some(lobby);
+    match screen {
+        "victory" | "defeat" => m.postgame = Some(postgame(screen == "victory", lobby)),
+        "menus" | "waiting" => {}
+        _ => m.lobby = Some(lobby),
     }
     m
 }
@@ -225,6 +348,17 @@ mod tests {
         let parties = m.parties();
         assert!(parties.contains_key("sova"), "{parties:?}");
         assert!(!parties.contains_key("omen"), "an incognito friend in your party isn't marked: {parties:?}");
+    }
+
+    #[test]
+    fn a_postgame_whose_results_never_come_goes_back_to_the_menus() {
+        let mut m = model("victory");
+        m.give_up_postgame("another match");
+        assert_eq!(m.phase, Phase::Postgame, "only the match it waited for");
+        let id = m.postgame.as_ref().unwrap().match_id.clone();
+        m.give_up_postgame(&id);
+        assert_eq!(m.phase, Phase::Menus);
+        assert!(m.postgame.is_none());
     }
 
     #[test]
@@ -294,14 +428,84 @@ mod tests {
     }
 
     #[test]
-    fn details_show_act_history_maps_and_recent_matches() {
+    fn postgame_orders_by_performance_and_labels_mvps() {
+        let s = screen("victory");
+        let omen = s.iter().position(|l| l.contains("Omen") && l.contains("431")).unwrap();
+        let me = s.iter().position(|l| l.contains("Alpha")).unwrap();
+        assert!(omen < me, "sorted by Performance Score");
+        assert!(s[omen].contains("MATCH MVP"));
+        assert!(s.iter().any(|l| l.contains("Echo") && l.contains("TEAM MVP")));
+        assert!(s.iter().any(|l| l.contains("New act best") && l.contains("5 first bloods")));
+        assert!(s[me].contains("TFKLFBDM"), "text placeholders for accolades in fixed order: {}", s[me]);
+        assert!(s.iter().any(|l| l.contains("+21")));
+    }
+
+    #[test]
+    fn defeat_banner_and_rr() {
+        let s = screen("defeat").join("\n");
+        assert!(s.contains("-16"));
+        assert!(s.contains("9  –  13"));
+    }
+
+    #[test]
+    fn postgame_details_list_the_same_parties_as_the_scoreboard() {
+        let mut m = model("victory");
+        m.players.get_mut("cypher").unwrap().name = Some(("leaked".into(), "1".into()));
+        let detail = |id: &str| render(&m, &UiState { view: View::Detail(id.into()), ..Default::default() }, WIDTH, 50).join("\n");
+        assert!(detail("raze").contains("partied with Foxtrot#DEMO"), "{}", detail("raze"));
+        let clove = detail("clove");
+        assert!(!clove.contains("partied with") && !clove.contains("leaked"), "an incognito mate is never shown: {clove}");
+        assert!(!detail("killjoy").contains("partied with"));
+    }
+
+    #[test]
+    fn profile_shows_accolades_only_for_you() {
         let mut m = model("in-game");
+        let ui = UiState { view: View::Detail("me".into()), ..Default::default() };
+        let mine = render(&m, &ui, WIDTH, 50).join("\n");
+        assert!(mine.contains("ACCOLADES") && mine.contains("Masterful"));
+        assert!(mine.contains("5 new"));
         let ui = UiState { view: View::Detail("raze".into()), ..Default::default() };
         let theirs = render(&m, &ui, WIDTH, 50).join("\n");
+        assert!(!theirs.contains("ACCOLADES"));
         assert!(theirs.contains("ACT HISTORY") && theirs.contains("MAPS THIS ACT") && theirs.contains("RECENT MATCHES"));
         m.players.get_mut("cypher").unwrap().name = Some(("leaked".into(), "1".into()));
         let ui = UiState { view: View::Detail("cypher".into()), ..Default::default() };
         let incog = render(&m, &ui, WIDTH, 50).join("\n");
         assert!(!incog.contains("leaked"), "an incognito player's name never appears, even if known");
+    }
+
+    #[test]
+    fn accolades_draw_as_sixel_images_in_their_slots() {
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let mut picker = Picker::halfblocks();
+        picker.set_protocol_type(ProtocolType::Sixel);
+        let icons = crate::icons::Icons::new(Some(&picker));
+        let buf = crate::ui::tests::render_buffer(&model("victory"), &UiState::default(), &icons, WIDTH, 50);
+        let text = render(&model("victory"), &UiState::default(), WIDTH, 50);
+        let mut images = Vec::new();
+        for y in 0..50u16 {
+            for x in 0..WIDTH {
+                if buf[(x, y)].symbol().contains("P") {
+                    images.push((x, y));
+                }
+            }
+        }
+        // Omen 4, me 4, Sova 2, Killjoy 1, Raze 2, Breach 1, Clove 1.
+        assert_eq!(images.len(), 15, "{images:?}");
+        let header = text.iter().find(|l| l.contains("ACCOLADES")).unwrap();
+        let header_x = header[..header.find("ACCOLADES").unwrap()].chars().count() as u16;
+        let me_y = text.iter().position(|l| l.contains("Alpha")).unwrap() as u16;
+        let mine: Vec<u16> = images.iter().filter(|(_, y)| *y == me_y).map(|(x, _)| *x).collect();
+        assert_eq!(mine, [header_x, header_x + 2, header_x + 4, header_x + 6], "my four icons sit in order under the header");
+    }
+
+    #[test]
+    fn legend_lists_every_icon() {
+        let ui = UiState { legend: true, ..Default::default() };
+        let s = render(&model("victory"), &ui, WIDTH, 50).join("\n");
+        for k in Accolade::ICONS {
+            assert!(s.contains(k.name()), "{k:?}");
+        }
     }
 }

@@ -57,9 +57,10 @@ stay in an earlier one.
 
 ## Riot's notices and assets
 
-Keep Riot's legal notices in the README and in `teamdiff --help`. Don't add Riot artwork or files
-taken from the game, such as icons, images or sounds: Riot's Legal Jibber Jabber policy doesn't allow
-its IP in apps. teamdiff names agents, maps, ranks and accolades the way the game does; agent, map and
+Keep Riot's legal notices in the README and in `teamdiff --help`. The accolade icons in
+`assets/accolades` are the only files taken from the game. Riot's Legal Jibber Jabber policy doesn't
+allow its IP in apps, so ask a maintainer before adding any other Riot artwork, images or sounds.
+teamdiff names agents, maps, ranks and accolades the way the game does; agent, map and
 rank names come from valorant-api.com while the app runs.
 
 ## tracker.gg

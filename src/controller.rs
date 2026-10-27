@@ -1,13 +1,16 @@
 //! Network side: follows the game's state through presence and loads player data in the background.
 
+use crate::goldstars::{self, Definitions};
 use crate::local_files::browser_profile_dir;
-use crate::model::{Load, Lobby, Model, Phase, PlayerData, parse_coregame, parse_pregame};
+use crate::model::{Load, Lobby, Model, Phase, PlayerData, Postgame, parse_coregame, parse_pregame};
 use crate::presence::LoopState;
 use crate::riot::{Riot, connect};
+use crate::stats::{parse_comp_updates, parse_match};
 use crate::tracker::{self, Tracker, riot_id_path};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,6 +22,9 @@ const RECENT_MATCHES: usize = 5;
 const HISTORY_ACTS: usize = 4;
 /// How long a failed load waits before the next tick may retry it.
 const RETRY_AFTER: Duration = Duration::from_secs(10);
+/// When you and your party are reloaded after a match. tracker.gg needs a while to add the match and
+/// caches profiles for three minutes.
+const REFRESH_AFTER_MATCH: Duration = Duration::from_secs(240);
 
 pub fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, Model> {
     shared.lock().unwrap_or_else(|e| e.into_inner())
@@ -45,6 +51,15 @@ async fn release_after(claims: Claims, ids: Vec<String>, delay: Duration) {
     let mut c = claims.lock().unwrap_or_else(|e| e.into_inner());
     for id in ids {
         c.remove(&id);
+    }
+}
+
+/// Lets the menus load `ids` again after `delay`, unless the next match has started by then: that
+/// match loads every player once.
+async fn refresh_after_match(shared: Shared, claims: Claims, ids: Vec<String>, match_id: String, delay: Duration) {
+    tokio::time::sleep(delay).await;
+    if lock(&shared).postgame.as_ref().is_some_and(|p| p.match_id == match_id) {
+        release_after(claims, ids, Duration::ZERO).await;
     }
 }
 
@@ -84,6 +99,9 @@ pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
             m.last_error = None;
             m.net = Some(riot.net.clone());
         }
+        if let Ok(Some(v)) = riot.goldstar_defs().await {
+            lock(&shared).defs = Arc::new(Definitions::from_response(&v));
+        }
         let mut session = Session::new(riot, tracker, shared.clone());
         loop {
             match session.tick().await {
@@ -111,6 +129,7 @@ struct Session {
     named: Claims,
     /// Players whose older acts were loaded for their details.
     history: Claims,
+    goldstars_requested: Arc<AtomicBool>,
     client_gone: bool,
 }
 
@@ -126,6 +145,7 @@ impl Session {
             requested: Claims::default(),
             named: Claims::default(),
             history: Claims::default(),
+            goldstars_requested: Arc::default(),
             client_gone: false,
         }
     }
@@ -161,10 +181,17 @@ impl Session {
 
     fn menus(&mut self) {
         self.pregame_id = None;
-        self.core_id = None;
+        if let Some(id) = self.core_id.take() {
+            let competitive = lock(&self.shared).lobby.as_ref().is_some_and(Lobby::is_competitive);
+            if competitive {
+                self.start_postgame(id);
+            }
+        }
         let party: Vec<String> = {
             let mut m = lock(&self.shared);
-            m.phase = Phase::Menus;
+            if m.phase != Phase::Postgame {
+                m.phase = Phase::Menus;
+            }
             m.lobby = None;
             let my_party = m.my_presence().and_then(|p| p.party_id.clone());
             m.presences.values().filter(|p| p.party_id.is_some() && p.party_id == my_party).map(|p| p.puuid.clone()).collect()
@@ -175,6 +202,7 @@ impl Session {
         for p in party {
             self.load_player(p);
         }
+        self.load_my_goldstars();
     }
 
     async fn pregame(&mut self) -> Result<()> {
@@ -225,6 +253,7 @@ impl Session {
         {
             let mut m = lock(&self.shared);
             m.phase = phase;
+            m.postgame = None;
             m.lobby = Some(lobby);
         }
         if competitive {
@@ -311,13 +340,51 @@ impl Session {
             }
         });
     }
+
+    fn load_my_goldstars(&mut self) {
+        if self.goldstars_requested.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let (riot, shared, requested) = (self.riot.clone(), self.shared.clone(), self.goldstars_requested.clone());
+        tokio::spawn(async move {
+            match riot.player_goldstars().await {
+                Ok(v) => {
+                    let mut m = lock(&shared);
+                    let parsed = v.map(|v| goldstars::parse_player(&v, &m.defs)).unwrap_or_default();
+                    m.my_goldstars = Some(parsed);
+                }
+                Err(e) => {
+                    report(&shared, &e);
+                    tokio::time::sleep(RETRY_AFTER).await;
+                    requested.store(false, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+
+    fn start_postgame(&mut self, match_id: String) {
+        let party: Vec<String> = {
+            let mut m = lock(&self.shared);
+            m.phase = Phase::Postgame;
+            let lobby = m.lobby.take();
+            m.postgame = Some(Postgame { match_id: match_id.clone(), lobby, ..Default::default() });
+            let my_party = m.my_presence().and_then(|p| p.party_id.clone());
+            let mates = m.presences.values().filter(|p| p.party_id.is_some() && p.party_id == my_party).map(|p| p.puuid.clone());
+            std::iter::once(m.me.clone()).chain(mates).collect()
+        };
+        self.goldstars_requested.store(false, Ordering::Relaxed);
+        tokio::spawn(postgame(self.riot.clone(), self.shared.clone(), match_id.clone()));
+        // Your stats change with this match; the menus reload you and your party once tracker.gg has it.
+        tokio::spawn(refresh_after_match(self.shared.clone(), self.requested.clone(), party, match_id, REFRESH_AFTER_MATCH));
+    }
 }
 
 /// The player whose details are open and the older acts to load for them: only once tracker.gg has
 /// their profile, and never for an incognito player.
 fn history_wanted(m: &Model, now: chrono::DateTime<chrono::Utc>) -> Option<(String, Vec<String>)> {
     let puuid = m.viewing.clone()?;
-    let incognito = puuid != m.me && m.lobby.as_ref().is_some_and(|l| l.slots.iter().any(|s| s.puuid == puuid && s.incognito));
+    let lobby = m.lobby.as_ref().or(m.postgame.as_ref().and_then(|p| p.lobby.as_ref()));
+    let incognito = puuid != m.me && lobby.is_some_and(|l| l.slots.iter().any(|s| s.puuid == puuid && s.incognito));
     let found = m.players.get(&puuid).is_some_and(|d| d.profile.ready().is_some());
     if incognito || !found {
         return None;
@@ -391,9 +458,78 @@ fn private_or<T>(result: Result<T>) -> Result<Load<T>> {
     }
 }
 
+/// After a match: waits for its details, your RR change and the accolades Riot awarded.
+async fn postgame(riot: Arc<Riot>, shared: Shared, match_id: String) {
+    const POLL: Duration = Duration::from_secs(5);
+    const ATTEMPTS: u32 = 120;
+    let still_current = |shared: &Shared| lock(shared).postgame.as_ref().is_some_and(|p| p.match_id == match_id);
+
+    let mut summary = None;
+    for _ in 0..ATTEMPTS {
+        if !still_current(&shared) {
+            return;
+        }
+        if let Ok(Some(m)) = riot.match_details(&match_id).await.map(|v| v.as_ref().and_then(parse_match)) {
+            summary = Some(Arc::new(m));
+            break;
+        }
+        tokio::time::sleep(POLL).await;
+    }
+    let Some(summary) = summary else {
+        lock(&shared).give_up_postgame(&match_id);
+        return;
+    };
+    {
+        let mut m = lock(&shared);
+        if let Some(p) = m.postgame.as_mut().filter(|p| p.match_id == match_id) {
+            p.summary = Some(summary.clone());
+            p.shown_at = Some(Instant::now());
+        }
+    }
+    let (mut rr_done, mut accolades_done) = (summary.queue != "competitive", false);
+    for _ in 0..ATTEMPTS {
+        if !still_current(&shared) || (rr_done && accolades_done) {
+            return;
+        }
+        if !rr_done
+            && let Ok(Some(v)) = riot.my_comp_updates(3).await
+            && let Some(u) = parse_comp_updates(&v).into_iter().find(|u| u.match_id == match_id)
+        {
+            if let Some(p) = lock(&shared).postgame.as_mut().filter(|p| p.match_id == match_id) {
+                p.rr = Some(u);
+            }
+            rr_done = true;
+        }
+        if !accolades_done && let Ok(Some(v)) = riot.player_goldstars().await {
+            let mut m = lock(&shared);
+            let parsed = goldstars::parse_player(&v, &m.defs);
+            if let Some(found) = parsed.match_near(summary.start_ms).cloned() {
+                if let Some(p) = m.postgame.as_mut().filter(|p| p.match_id == match_id) {
+                    p.accolades = Some(found);
+                }
+                accolades_done = true;
+            }
+            m.my_goldstars = Some(parsed);
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_refresh_after_a_match_leaves_the_next_match_alone() {
+        let shared: Shared = Arc::new(Mutex::new(crate::demo::model("victory")));
+        let id = lock(&shared).postgame.as_ref().unwrap().match_id.clone();
+        let claims: Claims = Arc::default();
+        claim(&claims, "me");
+        refresh_after_match(shared.clone(), claims.clone(), vec!["me".into()], "an older match".into(), Duration::ZERO).await;
+        assert!(!claim(&claims, "me"), "a later match keeps its claims");
+        refresh_after_match(shared, claims.clone(), vec!["me".into()], id, Duration::ZERO).await;
+        assert!(claim(&claims, "me"), "released for the menus to reload");
+    }
 
     #[test]
     fn a_rate_limit_isnt_reported_as_an_error() {

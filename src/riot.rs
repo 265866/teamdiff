@@ -1,8 +1,8 @@
 //! HTTP access to the Riot Client's local API and Riot's game servers.
 //!
-//! Every call here is a read the game client itself makes: the lobby and Riot IDs. Nothing here asks
-//! about another player's stats; those come from tracker.gg. The only PUT is the name lookup, which
-//! takes a list of player ids and changes nothing.
+//! Every call here is a read the game client itself makes: the lobby, Riot IDs, and your own match
+//! results. Nothing here asks about another player's stats; those come from tracker.gg. The only PUT is
+//! the name lookup, which takes a list of player ids and changes nothing.
 
 use crate::local_files::{GameLogInfo, Lockfile, game_log_path, lockfile_path, parse_game_log, parse_lockfile};
 use crate::presence::{Presence, parse_presences};
@@ -221,6 +221,16 @@ impl Riot {
         self.get(Host::Glz, &format!("/core-game/v1/matches/{id}")).await
     }
 
+    /// Your own latest RR changes.
+    pub async fn my_comp_updates(&self, count: u32) -> Result<Option<Value>> {
+        let path = format!("/mmr/v1/players/{}/competitiveupdates?startIndex=0&endIndex={count}&queue=competitive", self.puuid);
+        self.get(Host::Pd, &path).await
+    }
+
+    pub async fn match_details(&self, id: &str) -> Result<Option<Value>> {
+        self.get(Host::Pd, &format!("/match-details/v1/matches/{id}")).await
+    }
+
     /// Riot ids for the given players, as (puuid, name, tag).
     pub async fn names(&self, puuids: &[String]) -> Result<Vec<(String, String, String)>> {
         let body = Value::from(puuids.to_vec());
@@ -236,6 +246,14 @@ impl Riot {
                 ))
             })
             .collect())
+    }
+
+    pub async fn goldstar_defs(&self) -> Result<Option<Value>> {
+        self.get(Host::Pd, "/goldstars/v1/goldstars").await
+    }
+
+    pub async fn player_goldstars(&self) -> Result<Option<Value>> {
+        self.get(Host::Pd, &format!("/goldstars/v1/players/{}", self.puuid)).await
     }
 }
 
