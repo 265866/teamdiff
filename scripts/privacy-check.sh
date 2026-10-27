@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fails when personal data is in the repository: emails, local user paths, tokens, Riot IDs, PUUIDs
-# and other UUIDs, binary files nobody has reviewed, and any term in the local denylist. Symlink
-# targets count as text.
+# Fails when personal data is in the repository: emails not listed in .privacy-allow, local user
+# paths, tokens, Riot IDs, PUUIDs and other UUIDs, binary files nobody has reviewed, and any term in
+# the local denylist. Symlink targets count as text.
 #
 #   scripts/privacy-check.sh            staged files and their paths, and the message of every
 #                                       commit in HEAD's history
@@ -57,12 +57,13 @@ esac
 
 # Name, grep options and pattern of each rule whose every match is a finding.
 rules=(
-  "email address" "-E" '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
   "local user path" "-i -E" '([a-z]:[\\/]+users[\\/]+[^\\/ "]+)|((^|[^A-Za-z0-9._~%-])(/mnt)?(/[a-z])?/(users|home)/[^/ "]+)'
   "JSON web token" "-E" 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
   "GitHub token" "-E" 'gh[pousr]_[A-Za-z0-9]{30,}'
   "private key" "-E" '-----BEGIN [A-Z ]*PRIVATE KEY-----'
 )
+# Only addresses listed in .privacy-allow pass; list one only if it belongs to no person.
+email='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
 # Riot gives players and matches UUIDs, so only the public game-content ids in .privacy-allow pass.
 uuid='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
 # A Riot ID is `name#tag`, `name%23tag` in a URL, or a tag field in a Riot response. Made-up ones
@@ -86,6 +87,10 @@ declare -A allowed_uuids=()
 while read -r value; do
   [[ -n "$value" ]] && allowed_uuids[${value,,}]=1
 done < <(allowed uuid)
+declare -A allowed_emails=()
+while read -r value; do
+  [[ -n "$value" ]] && allowed_emails[${value,,}]=1
+done < <(allowed email)
 allowed_binaries=$(allowed binary)
 
 denylist=()
@@ -264,6 +269,10 @@ for ((i = 0; i < ${#rules[@]}; i += 3)); do
     fail "$place" "${rules[i]}"
   done < <(scan "${rules[i + 1]}" "${rules[i + 2]}")
 done
+
+while next; do
+  [[ -n "${allowed_emails[${value,,}]:-}" ]] || fail "$place" "email address"
+done < <(scan -E "$email")
 
 while next; do
   [[ -n "${allowed_uuids[${value,,}]:-}" ]] || fail "$place" "UUID that isn't public game content listed in .privacy-allow"

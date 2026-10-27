@@ -2,6 +2,7 @@
 #
 # uuid <value>          a public game-content id, as valorant-api.com and the game files list it
 # binary <path> <sha256> a binary file, such as an image, someone has checked holds no personal data
+# email <address>       an address that belongs to no person, such as a bot's
 
 uuid 00000000-0000-0000-0000-000000000000  # the all-time accolade summary
 uuid add6443a-41bd-e414-f6ad-e58d267f4e95  # agent: Jett
@@ -31,3 +32,5 @@ binary assets/accolades/mvp.png 823d59c2d72b402e130405b0270adc3573a10e279710ecae
 binary assets/accolades/plants.png 094b188c5204c1280abf7bb0320db093469ba25570ce5dfd8627b3d95d9a4360  # accolade icon from the game files
 binary assets/accolades/top-frag.png 363534cbdb42081da099b5cede5a1ff90f422d3c055ac950ded6386fea2f6fea  # accolade icon from the game files
 binary assets/accolades/trades.png 8345926f3d404e7edbca9383e9fca1f7aa579fef5b0499e58743b53ddf90caa7  # accolade icon from the game files
+
+email support@github.com  # Dependabot signs off its commits with it

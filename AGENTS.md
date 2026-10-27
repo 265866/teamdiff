@@ -79,7 +79,8 @@ match, honor `Retry-After`, and back off when tracker.gg refuses a request.
 - Commit with an email address you're happy to publish in every commit. GitHub's noreply address,
   under Settings > Emails, keeps your own private and still shows commits as Verified.
 - Leave out trailers with email addresses, such as `Co-authored-by` and `Signed-off-by`. The privacy
-  check rejects email addresses in commit messages.
+  check rejects email addresses in commit messages, except the few in `.privacy-allow` that belong to
+  no person, such as the one Dependabot signs off with.
 - Keep each pull request to one change. Stack pull requests when one depends on another.
 
 ## Code
