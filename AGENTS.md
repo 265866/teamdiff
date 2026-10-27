@@ -56,6 +56,9 @@ your friends', one per line in `.privacy-denylist`. Git ignores that file. Run
 `scripts/privacy-check.sh --history` before you push a branch, so data a later commit removed doesn't
 stay in an earlier one.
 
+CI reads the denylist from the `PRIVACY_DENYLIST` secret, which maintainers keep twice: as an Actions
+secret, and as a Dependabot secret for Dependabot's pull requests. Change both together.
+
 ## Riot's notices and assets
 
 Keep Riot's legal notices in the README and in `teamdiff --help`. The accolade icons in
@@ -79,7 +82,8 @@ match, honor `Retry-After`, and back off when tracker.gg refuses a request.
 - Commit with an email address you're happy to publish in every commit. GitHub's noreply address,
   under Settings > Emails, keeps your own private and still shows commits as Verified.
 - Leave out trailers with email addresses, such as `Co-authored-by` and `Signed-off-by`. The privacy
-  check rejects email addresses in commit messages.
+  check rejects email addresses in commit messages, except the few in `.privacy-allow` that belong to
+  no person, such as the one Dependabot signs off with.
 - Keep each pull request to one change. Stack pull requests when one depends on another.
 
 ## Code

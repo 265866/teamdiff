@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fails when personal data is in the repository: emails, local user paths, tokens, Riot IDs, PUUIDs
-# and other UUIDs, binary files nobody has reviewed, and any term in the local denylist. Symlink
-# targets count as text.
+# Fails when personal data is in the repository: emails not listed in .privacy-allow, local user
+# paths, tokens, Riot IDs, PUUIDs and other UUIDs, binary files nobody has reviewed, and any term in
+# the local denylist. Symlink targets count as text.
 #
 #   scripts/privacy-check.sh            staged files and their paths, and the message of every
 #                                       commit in HEAD's history
@@ -19,7 +19,8 @@
 # -s`, `git ls-tree -r <commit>` or `git show-ref` finds.
 #
 # Terms no pattern can catch, such as your own Riot ID, go one per line in `.privacy-denylist`,
-# which git ignores. CI reads the same list from the PRIVACY_DENYLIST secret.
+# which git ignores. CI reads the same list from the PRIVACY_DENYLIST secret, which exists twice:
+# as an Actions secret, and as a Dependabot secret for Dependabot's pull requests. Update both.
 set -euo pipefail
 
 # In a UTF-8 locale, a byte that isn't valid UTF-8 makes bash's `read` run on past a delimiter and
@@ -57,20 +58,22 @@ esac
 
 # Name, grep options and pattern of each rule whose every match is a finding.
 rules=(
-  "email address" "-E" '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
   "local user path" "-i -E" '([a-z]:[\\/]+users[\\/]+[^\\/ "]+)|((^|[^A-Za-z0-9._~%-])(/mnt)?(/[a-z])?/(users|home)/[^/ "]+)'
   "JSON web token" "-E" 'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
   "GitHub token" "-E" 'gh[pousr]_[A-Za-z0-9]{30,}'
   "private key" "-E" '-----BEGIN [A-Z ]*PRIVATE KEY-----'
 )
+# Only addresses listed in .privacy-allow pass; list one only if it belongs to no person.
+email='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
 # Riot gives players and matches UUIDs, so only the public game-content ids in .privacy-allow pass.
 uuid='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
 # A Riot ID is `name#tag`, `name%23tag` in a URL, or a tag field in a Riot response. Made-up ones
-# use one of the fake tags. Riot names can't contain dots, so a name may not follow one: links into
-# files, such as `README.md#usage` or `riot.rs#L10`, aren't Riot IDs, but `GG. Alpha#DEMO` is one.
-# The tag matches its whole run of letters and digits, so the next ID's boundary isn't consumed;
-# a tag longer than five characters isn't one.
-riot_id='(^|[^A-Za-z0-9_.])[A-Za-z0-9_][A-Za-z0-9_ ]{1,14}[A-Za-z0-9_]#[A-Za-z0-9]{3,}'
+# use one of the fake tags. Riot names can't contain dots, slashes or hyphens, so a name may not
+# follow one: links into files, such as `README.md#usage` or `riot.rs#L10`, issue links in release
+# notes, which name a repository, and anchors after a path segment aren't Riot IDs, but
+# `GG. Alpha#DEMO` is one. The tag matches its whole run of letters and digits, so the next ID's
+# boundary isn't consumed; a tag longer than five characters isn't one.
+riot_id='(^|[^A-Za-z0-9_./-])[A-Za-z0-9_][A-Za-z0-9_ ]{1,14}[A-Za-z0-9_]#[A-Za-z0-9]{3,}'
 # Names can hold any letter, such as `한글` or `José`. Read byte by byte, a name with a non-ASCII letter
 # among its last characters still matches.
 riot_id_intl=$'[\x80-\xff][A-Za-z0-9_ ]{0,14}#[A-Za-z0-9]{3,}'
@@ -86,6 +89,10 @@ declare -A allowed_uuids=()
 while read -r value; do
   [[ -n "$value" ]] && allowed_uuids[${value,,}]=1
 done < <(allowed uuid)
+declare -A allowed_emails=()
+while read -r value; do
+  [[ -n "$value" ]] && allowed_emails[${value,,}]=1
+done < <(allowed email)
 allowed_binaries=$(allowed binary)
 
 denylist=()
@@ -264,6 +271,10 @@ for ((i = 0; i < ${#rules[@]}; i += 3)); do
     fail "$place" "${rules[i]}"
   done < <(scan "${rules[i + 1]}" "${rules[i + 2]}")
 done
+
+while next; do
+  [[ -n "${allowed_emails[${value,,}]:-}" ]] || fail "$place" "email address"
+done < <(scan -E "$email")
 
 while next; do
   [[ -n "${allowed_uuids[${value,,}]:-}" ]] || fail "$place" "UUID that isn't public game content listed in .privacy-allow"
