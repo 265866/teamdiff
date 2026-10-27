@@ -15,6 +15,8 @@ pub type Shared = Arc<Mutex<Model>>;
 
 /// Matches used for each player's K/D and HS%.
 const RECENT_MATCHES: usize = 5;
+/// Acts before the current one shown in a player's details.
+const HISTORY_ACTS: usize = 4;
 /// How long a failed load waits before the next tick may retry it.
 const RETRY_AFTER: Duration = Duration::from_secs(10);
 
@@ -107,6 +109,8 @@ struct Session {
     loaded_match: Option<String>,
     requested: Claims,
     named: Claims,
+    /// Players whose older acts were loaded for their details.
+    history: Claims,
     client_gone: bool,
 }
 
@@ -121,6 +125,7 @@ impl Session {
             loaded_match: None,
             requested: Claims::default(),
             named: Claims::default(),
+            history: Claims::default(),
             client_gone: false,
         }
     }
@@ -145,6 +150,7 @@ impl Session {
             Some(LoopState::Ingame) => self.ingame().await?,
             Some(LoopState::Menus) | Some(LoopState::Other(_)) => self.menus(),
         }
+        self.load_history();
         self.tracker.close_if_idle();
         Ok(())
     }
@@ -272,6 +278,53 @@ impl Session {
             }
         });
     }
+
+    /// Loads older acts for the player whose details are open, once tracker.gg has their profile.
+    fn load_history(&mut self) {
+        let Some((puuid, acts)) = history_wanted(&lock(&self.shared), chrono::Utc::now()) else { return };
+        let Some(riot_id) = self.riot_id(&puuid) else { return };
+        if !claim(&self.history, &puuid) {
+            return;
+        }
+        let (tracker, shared, claims) = (self.tracker.clone(), self.shared.clone(), self.history.clone());
+        tokio::spawn(async move {
+            for act in acts {
+                let loaded =
+                    |d: &PlayerData| d.history.iter().chain(d.profile.ready().into_iter().flat_map(|p| &p.acts)).any(|a| a.act_id == act);
+                if lock(&shared).players.get(&puuid).is_some_and(loaded) {
+                    continue;
+                }
+                match tracker.season(&riot_id, &act).await {
+                    Ok(v) => {
+                        if let Some(a) = v.as_ref().and_then(tracker::parse_season).filter(|a| a.record.games() > 0) {
+                            lock(&shared).players.entry(puuid.clone()).or_default().history.push(a);
+                        }
+                    }
+                    // Older acts the player keeps private aren't a failure; they just aren't shown.
+                    Err(e) if e.is::<tracker::Private>() => return,
+                    Err(e) => {
+                        report(&shared, &e);
+                        release_after(claims, vec![puuid], RETRY_AFTER).await;
+                        return;
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// The player whose details are open and the older acts to load for them: only once tracker.gg has
+/// their profile, and never for an incognito player.
+fn history_wanted(m: &Model, now: chrono::DateTime<chrono::Utc>) -> Option<(String, Vec<String>)> {
+    let puuid = m.viewing.clone()?;
+    let incognito = puuid != m.me && m.lobby.as_ref().is_some_and(|l| l.slots.iter().any(|s| s.puuid == puuid && s.incognito));
+    let found = m.players.get(&puuid).is_some_and(|d| d.profile.ready().is_some());
+    if incognito || !found {
+        return None;
+    }
+    let current = m.content.current_act(now)?;
+    let acts = m.content.acts.iter().rev().skip_while(|a| a.id != current.id).skip(1).take(HISTORY_ACTS).map(|a| a.id.clone()).collect();
+    Some((puuid, acts))
 }
 
 fn update(shared: &Shared, puuid: &str, f: impl FnOnce(&mut PlayerData)) {
@@ -349,6 +402,26 @@ mod tests {
         assert!(lock(&shared).last_error.is_none(), "the footer counts it down instead");
         report(&shared, &anyhow::anyhow!("500 from /x"));
         assert!(lock(&shared).last_error.is_some());
+    }
+
+    #[test]
+    fn older_acts_load_only_for_a_found_player_who_isnt_incognito() {
+        let mut m = crate::demo::model("in-game");
+        let now = chrono::Utc::now();
+        assert_eq!(history_wanted(&m, now), None, "no details open");
+
+        m.viewing = Some("raze".into());
+        let acts = ["a5", "a4", "a3", "a2"].map(String::from).to_vec();
+        assert_eq!(history_wanted(&m, now), Some(("raze".into(), acts)));
+
+        m.players.get_mut("raze").unwrap().profile = Load::Private;
+        assert_eq!(history_wanted(&m, now), None, "private on tracker.gg");
+        m.players.get_mut("raze").unwrap().profile = Load::Missing;
+        assert_eq!(history_wanted(&m, now), None, "unknown to tracker.gg");
+
+        m.viewing = Some("cypher".into());
+        assert!(m.players["cypher"].profile.ready().is_some());
+        assert_eq!(history_wanted(&m, now), None, "incognito, even with a profile loaded earlier");
     }
 
     fn profile_body(privacy: &str) -> String {

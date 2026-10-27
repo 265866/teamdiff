@@ -4,7 +4,7 @@ use crate::content::Content;
 use crate::presence::Presence;
 use crate::riot::NetStats;
 use crate::stats::Record;
-use crate::tracker::{Profile, RecentMatch};
+use crate::tracker::{ActStats, Profile, RecentMatch};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -149,6 +149,8 @@ pub struct PlayerData {
     /// Wins and losses per map this act, by map name.
     pub maps: Load<Vec<(String, Record)>>,
     pub recent: Load<Vec<RecentMatch>>,
+    /// Older acts, loaded when the player's details are opened.
+    pub history: Vec<ActStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +161,8 @@ pub struct Model {
     pub content: Arc<Content>,
     pub lobby: Option<Lobby>,
     pub players: HashMap<String, PlayerData>,
+    /// The player whose details are open, so their older acts get loaded.
+    pub viewing: Option<String>,
     /// Latest presence per player.
     pub presences: HashMap<String, Presence>,
     /// The latest request failure and when it happened; shown briefly in the footer.
@@ -175,6 +179,7 @@ impl Model {
             content,
             lobby: None,
             players: HashMap::new(),
+            viewing: None,
             presences: HashMap::new(),
             last_error: None,
             net: None,

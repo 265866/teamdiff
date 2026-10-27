@@ -227,6 +227,10 @@ impl Tracker {
         self.get(&format!("/profile/riot/{riot_id}?")).await
     }
 
+    pub async fn season(&self, riot_id: &str, act_id: &str) -> Result<Option<Value>> {
+        self.get(&format!("/profile/riot/{riot_id}/segments/season?playlist=competitive&seasonId={act_id}&source=web")).await
+    }
+
     pub async fn maps(&self, riot_id: &str, act_id: &str) -> Result<Option<Value>> {
         self.get(&format!("/profile/riot/{riot_id}/segments/map?playlist=competitive&seasonId={act_id}&source=web")).await
     }

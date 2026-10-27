@@ -582,7 +582,16 @@ fn act_rows(m: &Model, d: &PlayerData) -> Vec<Row> {
             return rows;
         }
     };
-    for (act, a) in profile.acts.iter().filter(|a| a.record.games() > 0).filter_map(|a| Some((m.content.act(&a.act_id)?, a))) {
+    let mut acts: Vec<_> = profile
+        .acts
+        .iter()
+        .chain(&d.history)
+        .filter(|a| a.record.games() > 0)
+        .filter_map(|a| Some((m.content.act(&a.act_id)?, a)))
+        .collect();
+    acts.sort_by_key(|(act, _)| std::cmp::Reverse(act.start));
+    acts.dedup_by(|a, b| a.0.id == b.0.id);
+    for (act, a) in acts.into_iter().take(5) {
         let name = m.content.tier_name(a.tier);
         let p = a.record.pct().unwrap_or(0);
         rows.push(

@@ -111,11 +111,12 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
     let result = (|| -> Result<()> {
         loop {
             {
-                let m = controller::lock(&shared);
+                let mut m = controller::lock(&shared);
                 if last_phase.as_ref() != Some(&m.phase) {
                     // A new phase shows other players, so a details view from the last one closes.
                     ui.cursor = 0;
                     ui.view = View::Main;
+                    m.viewing = None;
                     last_phase = Some(m.phase.clone());
                 }
                 terminal.draw(|f| ui::draw(f, &m, &ui))?;
@@ -131,12 +132,16 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
-                KeyCode::Esc => ui.view = View::Main,
+                KeyCode::Esc => {
+                    ui.view = View::Main;
+                    controller::lock(&shared).viewing = None;
+                }
                 KeyCode::Up | KeyCode::Char('k') => ui.cursor = ui.cursor.saturating_sub(1),
                 KeyCode::Down | KeyCode::Char('j') => ui.cursor = (ui.cursor + 1).min(players.len().saturating_sub(1)),
                 KeyCode::Enter => {
                     if let Some(p) = players.get(ui.cursor.min(players.len().saturating_sub(1))) {
                         ui.view = View::Detail(p.clone());
+                        controller::lock(&shared).viewing = Some(p.clone());
                     }
                 }
                 KeyCode::Tab if demo_screen.is_some() => {

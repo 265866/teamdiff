@@ -88,6 +88,10 @@ fn player_data(p: &P) -> PlayerData {
     // Like tracker.gg: the latest act played, and unranked until a game this act.
     let acts = vec![ActStats { act_id: p.act.2.into(), tier: p.tier, record: Record { wins: p.act.0, losses: p.act.1 } }];
     let this_act = p.act.2 == "a6";
+    let history = vec![
+        ActStats { act_id: "a4".into(), tier: p.peak.saturating_sub(1), record: Record { wins: 30, losses: 27 } },
+        ActStats { act_id: "a3".into(), tier: p.tier, record: Record { wins: 40, losses: 38 } },
+    ];
     let maps = [("Ascent", p.map.0, p.map.1), ("Bind", 1, 0), ("Haven", 0, 1), ("Lotus", 1, 0)]
         .into_iter()
         .filter(|(_, w, l)| w + l > 0)
@@ -123,6 +127,7 @@ fn player_data(p: &P) -> PlayerData {
         profile: Load::Ready(Profile { tier: if this_act { p.tier } else { 0 }, rr: this_act.then_some(p.rr), peak_tier: p.peak, acts }),
         maps: Load::Ready(maps),
         recent: Load::Ready(recent),
+        history,
     }
 }
 
