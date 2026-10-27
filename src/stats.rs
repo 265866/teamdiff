@@ -29,16 +29,28 @@ pub struct ActRecord {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PlayerMatch {
+    pub agent_id: String,
     pub kills: u32,
     pub deaths: u32,
+    pub assists: u32,
+    pub score: u32,
+    pub rounds: u32,
+    pub damage: u32,
     pub headshots: u32,
     pub bodyshots: u32,
     pub legshots: u32,
+    pub performance: Option<f64>,
 }
 
 impl PlayerMatch {
+    pub fn acs(&self) -> u32 {
+        if self.rounds == 0 { 0 } else { (self.score as f64 / self.rounds as f64).round() as u32 }
+    }
     pub fn shots(&self) -> u32 {
         self.headshots + self.bodyshots + self.legshots
+    }
+    pub fn hs_pct(&self) -> Option<u32> {
+        (self.shots() > 0).then(|| (self.headshots as f64 * 100.0 / self.shots() as f64).round() as u32)
     }
 }
 

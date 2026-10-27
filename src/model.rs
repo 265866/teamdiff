@@ -3,8 +3,8 @@
 use crate::content::Content;
 use crate::presence::Presence;
 use crate::riot::NetStats;
-use crate::stats::{PlayerMatch, Record};
-use crate::tracker::Profile;
+use crate::stats::Record;
+use crate::tracker::{Profile, RecentMatch};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -125,6 +125,13 @@ pub enum Load<T> {
 }
 
 impl<T> Load<T> {
+    pub fn ready(&self) -> Option<&T> {
+        match self {
+            Load::Ready(t) => Some(t),
+            _ => None,
+        }
+    }
+
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Load<U> {
         match self {
             Load::Loading => Load::Loading,
@@ -141,7 +148,7 @@ pub struct PlayerData {
     pub profile: Load<Profile>,
     /// Wins and losses per map this act, by map name.
     pub maps: Load<Vec<(String, Record)>>,
-    pub recent: Load<Vec<PlayerMatch>>,
+    pub recent: Load<Vec<RecentMatch>>,
 }
 
 #[derive(Debug, Clone)]

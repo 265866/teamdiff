@@ -1,7 +1,7 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
 use crate::content::Content;
-use crate::model::{Load, Lobby, Model, Phase, Pick, Side, Slot};
+use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::riot::NetStats;
 use crate::stats::{Record, RecordSource, pooled_kd_hs};
 use chrono::Utc;
@@ -55,6 +55,7 @@ fn bad() -> Style {
 fn warn() -> Style {
     fg(rgb(0xfb, 0xbf, 0x24))
 }
+const CURSOR_BG: Color = rgb(0x1f, 0x2a, 0x37);
 const PARTY: [Color; 4] = [rgb(0x60, 0xa5, 0xfa), rgb(0xe8, 0x79, 0xf9), rgb(0xfb, 0x92, 0x3c), rgb(0xa3, 0xe6, 0x35)];
 
 fn rank_style(name: &str) -> Style {
@@ -103,11 +104,12 @@ fn width(segs: &[Seg]) -> usize {
 #[derive(Default, Clone)]
 struct Row {
     segs: Vec<Seg>,
+    bg: Option<Color>,
 }
 
 impl From<Vec<Seg>> for Row {
     fn from(segs: Vec<Seg>) -> Self {
-        Row { segs }
+        Row { segs, ..Default::default() }
     }
 }
 
@@ -158,11 +160,12 @@ fn col(title: &str, w: usize, right: bool) -> Col {
     Col { title: title.into(), w, right }
 }
 
-/// Joins cells into a row, separated by one space.
+/// Joins cells into a row. The first two columns (cursor and party marker) sit together; the rest
+/// are separated by one space.
 fn join(cols: &[Col], cells: Vec<Vec<Seg>>) -> Row {
     let mut row = Row::default();
     for (i, (c, cell)) in cols.iter().zip(cells).enumerate() {
-        if i > 0 {
+        if i > 1 {
             row.segs.push(s(" ", Style::new()));
         }
         row.segs.extend(fit(cell, c.w, c.right));
@@ -184,6 +187,20 @@ fn keys(pairs: &[(&str, &str)]) -> Vec<Seg> {
 
 const LOADING: &str = "···";
 const ERROR_SHOWN_FOR: std::time::Duration = std::time::Duration::from_secs(15);
+
+// ---------- UI state ----------
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum View {
+    #[default]
+    Main,
+    Detail(String),
+}
+
+#[derive(Debug, Default)]
+pub struct UiState {
+    pub view: View,
+    pub cursor: usize,
+}
 
 /// A screen ready to draw.
 struct Screen {
@@ -265,6 +282,7 @@ fn lobby_cols(map: &str) -> Vec<Col> {
     let map_title = if upper.len() + 8 <= 14 { format!("WIN% ON {upper}") } else { format!("{upper} WIN%") };
     vec![
         col("", 1, false),
+        col("", 1, false),
         col("AGENT", 11, false),
         col("PLAYER", 18, false),
         col("LVL", 4, true),
@@ -278,12 +296,13 @@ fn lobby_cols(map: &str) -> Vec<Col> {
 }
 
 fn last5_header(cols: &[Col]) -> Row {
-    let start: usize = cols[..8].iter().enumerate().map(|(i, c)| c.w + usize::from(i > 0)).sum::<usize>() + 1;
+    let start: usize = cols[..9].iter().enumerate().map(|(i, c)| c.w + usize::from(i > 1)).sum::<usize>() + 1;
     vec![s(" ".repeat(start), Style::new()), s(" LAST 5  ", dim())].into()
 }
 
-fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMap<String, Seg>) -> Row {
+fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool, cursor: bool, party: &HashMap<String, Seg>) -> Row {
     let content = &m.content;
+    let sel = vec![s(if cursor { "▸" } else { " " }, ally())];
     let party_cell = match party.get(&slot.puuid) {
         Some(mark) => vec![mark.clone()],
         None => vec![s(" ", Style::new())],
@@ -343,7 +362,7 @@ fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool,
         None | Some(Load::Loading) => (loading(), loading()),
         Some(Load::Missing | Load::Private) => (dash(), dash()),
         Some(Load::Ready(recent)) => {
-            let (kd, hs) = pooled_kd_hs(recent);
+            let (kd, hs) = pooled_kd_hs(recent.iter().map(|r| &r.player));
             let kd = kd
                 .map(|k| {
                     vec![s(
@@ -362,10 +381,25 @@ fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool,
             (kd, hs)
         }
     };
-    join(cols, vec![party_cell, agent, name, lvl, rank, peak, act, map, kd, hs])
+    let mut row = join(cols, vec![sel, party_cell, agent, name, lvl, rank, peak, act, map, kd, hs]);
+    if cursor {
+        row.bg = Some(CURSOR_BG);
+    }
+    row
 }
 
-fn lobby_screen(m: &Model, pregame: bool) -> Screen {
+/// Players the cursor can move over, in screen order.
+pub fn selectable(m: &Model) -> Vec<String> {
+    match m.phase {
+        Phase::Menus => vec![m.me.clone()],
+        Phase::Pregame | Phase::Ingame => {
+            m.lobby.as_ref().filter(|l| l.is_competitive()).map(|l| l.slots.iter().map(|s| s.puuid.clone()).collect()).unwrap_or_default()
+        }
+        Phase::Waiting(_) => Vec::new(),
+    }
+}
+
+fn lobby_screen(m: &Model, ui: &UiState, pregame: bool) -> Screen {
     let lobby = m.lobby.as_ref();
     let map = lobby.map(|l| m.content.map(&l.map_url)).unwrap_or_default();
     let queue = lobby.map(|l| queue_name(&l.queue)).unwrap_or_default();
@@ -396,6 +430,8 @@ fn lobby_screen(m: &Model, pregame: bool) -> Screen {
         Some(l) => {
             let cols = lobby_cols(&map);
             let party = party_marks(&m.parties());
+            let order = selectable(m);
+            let cursor_id = order.get(ui.cursor).cloned();
             for (side, label, style) in [(Side::Ally, "YOUR TEAM", ally()), (Side::Enemy, "ENEMY TEAM", enemy())] {
                 let slots: Vec<&Slot> = l.slots.iter().filter(|s| s.side == side).collect();
                 if slots.is_empty() {
@@ -410,12 +446,12 @@ fn lobby_screen(m: &Model, pregame: bool) -> Screen {
                     rows.push(header(&cols));
                 }
                 for slot in slots {
-                    rows.push(lobby_row(m, l, slot, &cols, pregame, &party));
+                    rows.push(lobby_row(m, l, slot, &cols, pregame, cursor_id.as_deref() == Some(&slot.puuid), &party));
                 }
             }
         }
     }
-    Screen { title: vec![s(title, bold())], right, rows, footer: keys(&[("q", "quit")]) }
+    Screen { title: vec![s(title, bold())], right, rows, footer: keys(&[("↑↓", "select"), ("enter", "details"), ("q", "quit")]) }
 }
 
 // ---------- menus / waiting ----------
@@ -510,8 +546,184 @@ fn menus_screen(m: &Model) -> Screen {
         title: vec![s("teamdiff", bold())],
         right: vec![s("● ", good()), s(m.region.clone(), dim())],
         rows,
-        footer: keys(&[("q", "quit")]),
+        footer: keys(&[("enter", "profile"), ("q", "quit")]),
     }
+}
+
+// ---------- detail / profile ----------
+const HALF: usize = 50;
+
+fn two(left: Row, right: Row) -> Row {
+    let mut segs = fit(left.segs, HALF, false);
+    segs.push(s("    ", Style::new()));
+    segs.extend(right.segs);
+    Row { segs, bg: None }
+}
+
+fn bar(p: u32) -> Vec<Seg> {
+    let f = ((p as f64 / 10.0).round() as usize).min(10);
+    vec![s("▇".repeat(f), good()), s("▇".repeat(10 - f), fg(rgb(0x2a, 0x31, 0x3a)))]
+}
+
+fn act_rows(m: &Model, d: &PlayerData) -> Vec<Row> {
+    let mut rows: Vec<Row> = vec![vec![s("ACT HISTORY", bold())].into(), vec![s("  ACT     RANK         W-L     WIN%", dim())].into()];
+    let profile = match &d.profile {
+        Load::Ready(p) => p,
+        Load::Private => {
+            rows.push(vec![s("  private on tracker.gg", dim())].into());
+            return rows;
+        }
+        Load::Missing => {
+            rows.push(vec![s("  —", dim())].into());
+            return rows;
+        }
+        Load::Loading => {
+            rows.push(vec![s(format!("  {LOADING}"), dim())].into());
+            return rows;
+        }
+    };
+    for (act, a) in profile.acts.iter().filter(|a| a.record.games() > 0).filter_map(|a| Some((m.content.act(&a.act_id)?, a))) {
+        let name = m.content.tier_name(a.tier);
+        let p = a.record.pct().unwrap_or(0);
+        rows.push(
+            vec![
+                s(format!("  {:<8}", act.label), text()),
+                s(format!("{name:<13}"), rank_style(&name)),
+                s(format!("{:<8}", format!("{}-{}", a.record.wins, a.record.losses)), text()),
+                s(format!("{p}%"), pct_style(p)),
+            ]
+            .into(),
+        );
+    }
+    rows
+}
+
+fn map_rows(d: &PlayerData, highlight: Option<&str>) -> Vec<Row> {
+    let mut rows: Vec<Row> = vec![vec![s("MAPS THIS ACT", bold())].into(), vec![s("  MAP      W-L    WIN%", dim())].into()];
+    let maps = match &d.maps {
+        Load::Ready(maps) => maps,
+        Load::Missing | Load::Private => {
+            rows.push(vec![s("  —", dim())].into());
+            return rows;
+        }
+        Load::Loading => {
+            rows.push(vec![s(format!("  {LOADING}"), dim())].into());
+            return rows;
+        }
+    };
+    for (name, r) in maps {
+        let p = r.pct().unwrap_or(0);
+        let current = highlight.is_some_and(|h| h.eq_ignore_ascii_case(name));
+        let mut row = vec![
+            s(format!("  {name:<9}"), if current { bold() } else { text() }),
+            s(format!("{:<7}", format!("{}-{}", r.wins, r.losses)), text()),
+            s(format!("{:<6}", format!("{p}%")), pct_style(p)),
+        ];
+        row.extend(bar(p));
+        rows.push(row.into());
+    }
+    rows
+}
+
+fn recent_rows(m: &Model, d: &PlayerData) -> Vec<Row> {
+    let mut rows: Vec<Row> = vec![
+        vec![s("RECENT MATCHES", bold())].into(),
+        vec![s("  MAP      AGENT      RESULT    K / D / A   PERF  ACS   HS%", dim())].into(),
+    ];
+    let recent = match &d.recent {
+        Load::Ready(recent) => recent,
+        Load::Missing | Load::Private => {
+            rows.push(vec![s("  —", dim())].into());
+            return rows;
+        }
+        Load::Loading => {
+            rows.push(vec![s(format!("  {LOADING}"), dim())].into());
+            return rows;
+        }
+    };
+    for mt in recent {
+        let p = &mt.player;
+        let (res, style) = match mt.won {
+            Some(true) => ("W", good()),
+            Some(false) => ("L", bad()),
+            None => ("D", dim()),
+        };
+        rows.push(
+            vec![
+                s(format!("  {:<9}", m.content.map(&mt.map_id)), text()),
+                s(format!("{:<11}", m.content.agent(&p.agent_id)), text()),
+                s(res, style),
+                s(format!(" {:<8}", format!("{}-{}", mt.rounds_won, mt.rounds_lost)), text()),
+                s(format!("{:<12}", format!("{}/{}/{}", p.kills, p.deaths, p.assists)), text()),
+                s(format!("{:<6}", p.performance.map(|v| v.round().to_string()).unwrap_or_else(|| "—".into())), bold()),
+                s(format!("{:<6}", p.acs()), text()),
+                s(p.hs_pct().map(|h| format!("{h}%")).unwrap_or_else(|| "—".into()), text()),
+            ]
+            .into(),
+        );
+    }
+    rows
+}
+
+fn detail_screen(m: &Model, puuid: &str) -> Screen {
+    let content = &m.content;
+    let lobby = m.lobby.as_ref();
+    let slot = lobby.and_then(|l| l.slots.iter().find(|s| s.puuid == puuid));
+    let incognito = slot.is_some_and(|s| s.incognito) && puuid != m.me;
+    // Incognito players are never looked up.
+    let d = if incognito {
+        PlayerData { profile: Load::Missing, maps: Load::Missing, recent: Load::Missing, ..Default::default() }
+    } else {
+        m.players.get(puuid).cloned().unwrap_or_default()
+    };
+    let agent = slot.and_then(|s| s.agent_id.clone());
+    let title = if incognito {
+        agent.as_deref().map(|a| content.agent(a)).unwrap_or_else(|| "Player".into())
+    } else {
+        d.name.as_ref().map(|(n, t)| format!("{n}#{t}")).unwrap_or_else(|| if puuid == m.me { "you".into() } else { LOADING.into() })
+    };
+    let mut head: Vec<Seg> = Vec::new();
+    if let Some(a) = &agent {
+        head.extend([s(content.agent(a), bold()), s("   ", Style::new())]);
+    }
+    if let Some(p) = d.profile.ready() {
+        head.extend(rank_segs(content, p.tier, p.rr));
+        if p.peak_tier > 0 {
+            head.extend([s("   peak ", dim()), tier_seg(content, p.peak_tier)]);
+        }
+    }
+    if let Some(l) = slot.filter(|s| !s.hide_level).and_then(|s| s.level) {
+        head.push(s(format!("   level {l}"), dim()));
+    }
+    let parties = m.parties();
+    if let Some(party) = parties.get(puuid) {
+        let mut mates: Vec<String> = parties
+            .iter()
+            .filter(|(p, id)| *id == party && *p != puuid)
+            .map(|(p, _)| {
+                let mate_slot = lobby.and_then(|l| l.slots.iter().find(|s| &s.puuid == p));
+                name_segs(m, p, mate_slot.is_some_and(|s| s.incognito), mate_slot.and_then(|s| s.agent_id.as_deref()))
+                    .iter()
+                    .map(|x| x.content.to_string())
+                    .collect()
+            })
+            .collect();
+        mates.sort();
+        if !mates.is_empty() {
+            head.extend([s("   partied with ", dim()), s(mates.join(", "), text())]);
+        }
+    }
+    let map = m.lobby.as_ref().map(|l| content.map(&l.map_url));
+    let (left, right) = (act_rows(m, &d), map_rows(&d, map.as_deref()));
+    let mut rows = vec![head.into(), blank()];
+    let n = left.len().max(right.len());
+    let (mut left, mut right) = (left.into_iter(), right.into_iter());
+    for _ in 0..n {
+        rows.push(two(left.next().unwrap_or_default(), right.next().unwrap_or_default()));
+    }
+    rows.push(blank());
+    rows.extend(recent_rows(m, &d));
+    Screen { title: vec![s(title, bold())], right: Vec::new(), rows, footer: keys(&[("esc", "back"), ("q", "quit")]) }
 }
 
 // ---------- frame ----------
@@ -529,12 +741,13 @@ fn net_status(net: Option<&NetStats>) -> Vec<Seg> {
     vec![s("◐ ", warn()), s(t, warn())]
 }
 
-fn screen(m: &Model) -> Screen {
-    match &m.phase {
-        Phase::Waiting(reason) => waiting_screen(reason),
-        Phase::Menus => menus_screen(m),
-        Phase::Pregame => lobby_screen(m, true),
-        Phase::Ingame => lobby_screen(m, false),
+fn screen(m: &Model, ui: &UiState) -> Screen {
+    match (&ui.view, &m.phase) {
+        (View::Detail(p), _) => detail_screen(m, p),
+        (_, Phase::Waiting(reason)) => waiting_screen(reason),
+        (_, Phase::Menus) => menus_screen(m),
+        (_, Phase::Pregame) => lobby_screen(m, ui, true),
+        (_, Phase::Ingame) => lobby_screen(m, ui, false),
     }
 }
 
@@ -554,8 +767,8 @@ fn too_small(f: &mut Frame, need_w: u16, need_h: u16) {
     f.render_widget(p, rect);
 }
 
-pub fn draw(f: &mut Frame, m: &Model) {
-    let sc = screen(m);
+pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
+    let sc = screen(m, ui);
     let status = match &m.last_error {
         Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
         _ => net_status(m.net.as_deref()),
@@ -578,7 +791,17 @@ pub fn draw(f: &mut Frame, m: &Model) {
     if !status.is_empty() {
         block = block.title_bottom(Line::from([vec![s(" ", border())], status, vec![s(" ─", border())]].concat()).right_aligned());
     }
-    let lines: Vec<Line> = sc.rows.iter().map(|r| Line::from(r.segs.clone())).collect();
+    let lines: Vec<Line> = sc
+        .rows
+        .iter()
+        .map(|r| {
+            let line = Line::from(r.segs.clone());
+            match r.bg {
+                Some(bg) => line.style(Style::new().bg(bg)),
+                None => line,
+            }
+        })
+        .collect();
     f.render_widget(Paragraph::new(lines).style(text()).block(block), rect);
 }
 
@@ -588,9 +811,9 @@ pub mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    pub fn render(m: &Model, w: u16, h: u16) -> Vec<String> {
+    pub fn render(m: &Model, ui: &UiState, w: u16, h: u16) -> Vec<String> {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        t.draw(|f| draw(f, m)).unwrap();
+        t.draw(|f| draw(f, m, ui)).unwrap();
         let buf = t.backend().buffer();
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect()
     }
@@ -607,15 +830,15 @@ pub mod tests {
 
     #[test]
     fn map_header_falls_back_for_long_names() {
-        assert_eq!(lobby_cols("Ascent")[7].title, "WIN% ON ASCENT");
-        assert_eq!(lobby_cols("Corrode")[7].title, "CORRODE WIN%");
+        assert_eq!(lobby_cols("Ascent")[8].title, "WIN% ON ASCENT");
+        assert_eq!(lobby_cols("Corrode")[8].title, "CORRODE WIN%");
     }
 
     #[test]
     fn players_without_stats_say_why() {
         let mut m = crate::demo::model("in-game");
         m.players.get_mut("neon").unwrap().profile = Load::Missing;
-        let lines = render(&m, 120, 22);
+        let lines = render(&m, &UiState::default(), 120, 22);
         let row = |agent: &str| lines.iter().find(|l| l.contains(agent)).cloned().unwrap_or_default();
         assert!(row("Omen").contains("incognito"), "{}", row("Omen"));
         assert!(row("Neon").contains("not found"), "{}", row("Neon"));
@@ -626,18 +849,18 @@ pub mod tests {
         let mut m = Model::new(std::sync::Arc::default());
         let err = "500 Internal Server Error from /name-service/v2/players, with a reason long enough to be cut off".to_string();
         m.last_error = Some((err.clone(), Instant::now()));
-        let lines = render(&m, WIDTH, 10);
+        let lines = render(&m, &UiState::default(), WIDTH, 10);
         let footer = lines.iter().find(|l| l.starts_with('└')).unwrap();
         assert!(footer.contains("⚠ 500 Internal Server Error from /name-service/v2/players"), "the status survives truncation: {footer}");
         m.last_error = Some((err, Instant::now() - ERROR_SHOWN_FOR));
-        let lines = render(&m, WIDTH, 10);
+        let lines = render(&m, &UiState::default(), WIDTH, 10);
         assert!(!lines.iter().any(|l| l.contains('⚠')), "old errors fade out");
     }
 
     #[test]
     fn too_small_screen_reports_width() {
         let m = Model::new(std::sync::Arc::default());
-        let lines = render(&m, 80, 20);
+        let lines = render(&m, &UiState::default(), 80, 20);
         assert!(lines.iter().any(|l| l.contains("Terminal too small")));
         assert!(lines.iter().any(|l| l.contains("Widen to 112 columns (now 80)")));
     }

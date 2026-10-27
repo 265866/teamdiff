@@ -7,6 +7,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Act {
     pub id: String,
+    /// Short label such as "V26 A6" or "E9 A3".
+    pub label: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
 }
@@ -53,6 +55,7 @@ impl Content {
             .filter_map(|s| {
                 Some(Act {
                     id: s["uuid"].as_str()?.to_lowercase(),
+                    label: act_label(s["title"].as_str().or(s["displayName"].as_str())?),
                     start: s["startTime"].as_str()?.parse().ok()?,
                     end: s["endTime"].as_str()?.parse().ok()?,
                 })
@@ -79,6 +82,11 @@ impl Content {
         self.tiers.get(&tier).cloned().unwrap_or_else(|| if tier == 0 { "Unranked".into() } else { format!("Tier {tier}") })
     }
 
+    pub fn act(&self, id: &str) -> Option<&Act> {
+        let id = id.to_lowercase();
+        self.acts.iter().find(|a| a.id == id)
+    }
+
     pub fn current_act(&self, now: DateTime<Utc>) -> Option<&Act> {
         self.acts.iter().find(|a| a.start <= now && now < a.end)
     }
@@ -98,6 +106,26 @@ fn title_case(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// "V26 // ACT VI" -> "V26 A6", "EPISODE 9 // ACT III" -> "E9 A3".
+fn act_label(title: &str) -> String {
+    let (ep, act) = title.split_once("//").map(|(a, b)| (a.trim(), b.trim())).unwrap_or(("", title.trim()));
+    let ep = ep.strip_prefix("EPISODE ").map(|n| format!("E{n}")).unwrap_or_else(|| ep.to_string());
+    let act = act.strip_prefix("ACT ").map(|r| format!("A{}", roman(r))).unwrap_or_else(|| act.to_string());
+    [ep, act].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+fn roman(r: &str) -> u32 {
+    let val = |c| match c {
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        _ => 0,
+    };
+    let digits: Vec<u32> = r.chars().map(val).collect();
+    digits.iter().enumerate().map(|(i, &d)| if digits.get(i + 1).is_some_and(|&n| n > d) { -(d as i64) } else { d as i64 }).sum::<i64>()
+        as u32
 }
 
 #[cfg(test)]
@@ -140,13 +168,20 @@ pub mod tests {
     }
 
     #[test]
-    fn acts_are_ordered() {
+    fn acts_are_labelled_and_ordered() {
         let c = sample();
-        let ids: Vec<_> = c.acts.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(ids, ["old", "a5", "a6"]);
+        let labels: Vec<_> = c.acts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, ["E4 A3", "V26 A5", "V26 A6"]);
         let now: DateTime<Utc> = "2026-10-17T00:00:00Z".parse().unwrap();
         assert_eq!(c.current_act(now).unwrap().id, "a6");
         assert_eq!(c.previous_act("a6").unwrap().id, "a5");
         assert!(c.previous_act("old").is_none());
+    }
+
+    #[test]
+    fn roman_numerals() {
+        assert_eq!(roman("IV"), 4);
+        assert_eq!(roman("VI"), 6);
+        assert_eq!(roman("IX"), 9);
     }
 }

@@ -379,7 +379,7 @@ mod tests {
         let body = profile_body("public").replace(r#""privacy":"public""#, r#""privacy":"premier""#);
         let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, ""), answer(404, None, "")]);
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
-        assert!(matches!(&lock(&shared).players["p"].profile, Load::Ready(p) if p.tier == 14));
+        assert_eq!(lock(&shared).players["p"].profile.ready().map(|p| p.tier), Some(14));
     }
 
     #[tokio::test]
@@ -391,7 +391,7 @@ mod tests {
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
         let m = lock(&shared);
         let d = &m.players["p"];
-        assert!(matches!(&d.profile, Load::Ready(p) if p.tier == 14));
+        assert_eq!(d.profile.ready().map(|p| p.tier), Some(14));
         assert_eq!((d.maps.clone().map(|_| ()), d.recent.clone().map(|_| ())), (Load::Private, Load::Private));
     }
 
@@ -408,7 +408,7 @@ mod tests {
         let riot_puuid = "riot-puuid";
         load_player(&tracker, &shared, riot_puuid, "a%23b", act).await.unwrap();
         let m = lock(&shared);
-        let Load::Ready(profile) = &m.players[riot_puuid].profile else { panic!("the profile is shown") };
+        let profile = m.players[riot_puuid].profile.ready().expect("the profile is shown");
         assert_eq!((profile.tier, profile.rr), (14, Some(40)));
     }
 }

@@ -278,6 +278,17 @@ impl Profile {
     }
 }
 
+/// One of a player's recent competitive matches, from their side.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecentMatch {
+    pub map_id: String,
+    /// `None` for a draw.
+    pub won: Option<bool>,
+    pub rounds_won: u32,
+    pub rounds_lost: u32,
+    pub player: PlayerMatch,
+}
+
 /// The tier in one of tracker.gg's rank icon URLs (`.../tiersv2/24.png`), which use today's numbering.
 fn tier_from_icon(stat: &Value) -> u32 {
     stat["metadata"]["iconUrl"]
@@ -339,20 +350,38 @@ pub fn parse_maps(v: &Value) -> Vec<(String, Record)> {
 }
 
 /// The newest `count` matches from `/matches/riot/{id}`.
-pub fn parse_matches(v: &Value, count: usize) -> Vec<PlayerMatch> {
+pub fn parse_matches(v: &Value, count: usize) -> Vec<RecentMatch> {
     v["data"]["matches"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|m| {
             let seg = m["segments"].as_array()?.iter().find(|s| s["type"] == "overview")?;
-            let n = |k: &str| stat_u32(&seg["stats"], k);
-            Some(PlayerMatch {
-                kills: n("kills"),
-                deaths: n("deaths"),
-                headshots: n("dealtHeadshots"),
-                bodyshots: n("dealtBodyshots"),
-                legshots: n("dealtLegshots"),
+            let st = &seg["stats"];
+            let n = |k: &str| stat_u32(st, k);
+            let won = match m["metadata"]["result"].as_str() {
+                Some("victory") => Some(true),
+                Some("defeat") => Some(false),
+                _ => None,
+            };
+            Some(RecentMatch {
+                map_id: m["metadata"]["map"].as_str().unwrap_or("").to_string(),
+                won,
+                rounds_won: n("roundsWon"),
+                rounds_lost: n("roundsLost"),
+                player: PlayerMatch {
+                    agent_id: seg["metadata"]["agent"].as_str().unwrap_or("").to_string(),
+                    kills: n("kills"),
+                    deaths: n("deaths"),
+                    assists: n("assists"),
+                    score: n("score"),
+                    rounds: n("roundsPlayed"),
+                    damage: n("damage"),
+                    headshots: n("dealtHeadshots"),
+                    bodyshots: n("dealtBodyshots"),
+                    legshots: n("dealtLegshots"),
+                    performance: st["performance"]["value"].as_f64(),
+                },
             })
         })
         .take(count)
@@ -461,7 +490,12 @@ pub(crate) mod tests {
             json!({ "data": { "matches": [m("m1", "victory"), m("m2", "defeat"), m("m3", "draw"), { "attributes": { "id": "bad" } }] } });
         let all = parse_matches(&v, 5);
         assert_eq!(all.len(), 3, "a match without the player's segment is skipped");
-        assert_eq!(all[0], PlayerMatch { kills: 24, deaths: 13, headshots: 4, bodyshots: 40, legshots: 0 });
+        let first = &all[0];
+        assert_eq!((first.won, first.rounds_won, first.rounds_lost, first.map_id.as_str()), (Some(true), 13, 7, "92584fbe"));
+        assert_eq!((first.player.kills, first.player.deaths, first.player.assists, first.player.acs()), (24, 13, 7, 352));
+        assert_eq!(first.player.hs_pct(), Some(9));
+        assert_eq!(first.player.performance, Some(400.97));
+        assert_eq!((all[1].won, all[2].won), (Some(false), None));
         assert_eq!(parse_matches(&v, 1).len(), 1);
     }
 
@@ -585,7 +619,7 @@ pub(crate) mod tests {
         assert!(!maps.is_empty());
         let recent = parse_matches(&t.matches(&path).await.unwrap().unwrap(), 5);
         assert_eq!(recent.len(), 5);
-        assert!(recent.iter().all(|m| m.shots() > 0), "{recent:?}");
+        assert!(recent.iter().all(|m| m.player.rounds > 0 && !m.player.agent_id.is_empty() && m.player.performance.is_some()));
         assert!(t.profile("nobody%23zz9q9zz").await.unwrap().is_none(), "unknown players are a 404");
         if let Ok(id) = std::env::var("TEAMDIFF_LIVE_PRIVATE_ID") {
             let (name, tag) = id.split_once('#').expect("name#tag");
@@ -594,6 +628,6 @@ pub(crate) mod tests {
         }
         println!("tier {} rr {:?} peak {} act {:?}", profile.tier, profile.rr, profile.peak_tier, profile.acts);
         println!("maps {maps:?}");
-        println!("kd/hs over 5: {:?}", crate::stats::pooled_kd_hs(&recent));
+        println!("kd/hs over 5: {:?}", crate::stats::pooled_kd_hs(recent.iter().map(|m| &m.player)));
     }
 }

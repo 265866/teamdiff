@@ -4,7 +4,7 @@ use crate::content::Content;
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::presence::{LoopState, Presence};
 use crate::stats::{PlayerMatch, Record};
-use crate::tracker::{ActStats, Profile};
+use crate::tracker::{ActStats, Profile, RecentMatch};
 use chrono::{Duration as Days, Utc};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -93,8 +93,31 @@ fn player_data(p: &P) -> PlayerData {
         .filter(|(_, w, l)| w + l > 0)
         .map(|(name, wins, losses)| (name.to_string(), Record { wins, losses }))
         .collect();
-    let recent =
-        (0..5).map(|_| PlayerMatch { kills: p.kd.0 / 5, deaths: p.kd.1 / 5, headshots: p.hs.0, bodyshots: p.hs.1, legshots: 0 }).collect();
+    let recent = ["Ascent", "Lotus", "Bind", "Haven", "Sunset"]
+        .iter()
+        .enumerate()
+        .map(|(i, map)| {
+            let won = i % 2 == 0;
+            RecentMatch {
+                map_id: map.to_lowercase(),
+                won: Some(won),
+                rounds_won: if won { 13 } else { 10 },
+                rounds_lost: if won { 9 } else { 13 },
+                player: PlayerMatch {
+                    agent_id: p.agent.into(),
+                    kills: p.kd.0 / 5,
+                    deaths: p.kd.1 / 5,
+                    assists: 5,
+                    score: 5800 + i as u32 * 300,
+                    rounds: 22,
+                    headshots: p.hs.0,
+                    bodyshots: p.hs.1,
+                    performance: Some(250.0 + 20.0 * i as f64),
+                    ..Default::default()
+                },
+            }
+        })
+        .collect();
     PlayerData {
         name: (!p.incognito).then(|| (p.name.to_string(), p.tag.to_string())),
         profile: Load::Ready(Profile { tier: if this_act { p.tier } else { 0 }, rr: this_act.then_some(p.rr), peak_tier: p.peak, acts }),
@@ -172,11 +195,11 @@ pub fn model(screen: &str) -> Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::WIDTH;
     use crate::ui::tests::render;
+    use crate::ui::{UiState, View, WIDTH};
 
     fn screen(name: &str) -> Vec<String> {
-        render(&model(name), WIDTH, 50)
+        render(&model(name), &UiState::default(), WIDTH, 50)
     }
 
     #[test]
@@ -203,7 +226,7 @@ mod tests {
     fn you_see_your_own_name_when_you_play_incognito() {
         let mut m = model("in-game");
         m.lobby.as_mut().unwrap().slots.iter_mut().find(|s| s.puuid == "me").unwrap().incognito = true;
-        let s = render(&m, WIDTH, 50).join("\n");
+        let s = render(&m, &UiState::default(), WIDTH, 50).join("\n");
         assert!(s.contains("Alpha"), "{s}");
     }
 
@@ -243,7 +266,7 @@ mod tests {
         let mut m = model("in-game");
         let neon = m.players.get_mut("neon").unwrap();
         (neon.profile, neon.maps, neon.recent) = (Load::Private, Load::Private, Load::Private);
-        let s = render(&m, WIDTH, 50);
+        let s = render(&m, &UiState::default(), WIDTH, 50);
         let row = s.iter().find(|l| l.contains("Hotel")).unwrap();
         assert!(row.contains("private") && !row.contains('%') && !row.contains("···"), "{row}");
     }
@@ -253,6 +276,9 @@ mod tests {
         let s = screen("in-game");
         let cypher = s.iter().find(|l| l.contains("Cypher")).unwrap();
         assert!(!cypher.contains('%') && !cypher.contains("Diamond"), "incognito players are never looked up: {cypher}");
+        let detail =
+            render(&model("in-game"), &UiState { view: View::Detail("cypher".into()), ..Default::default() }, WIDTH, 50).join("\n");
+        assert!(!detail.contains("Diamond") && !detail.contains("V26"), "{detail}");
     }
 
     #[test]
@@ -260,5 +286,17 @@ mod tests {
         let s = screen("loading");
         let neon = s.iter().find(|l| l.contains("Hotel")).unwrap();
         assert!(neon.contains("···"));
+    }
+
+    #[test]
+    fn details_show_act_history_maps_and_recent_matches() {
+        let mut m = model("in-game");
+        let ui = UiState { view: View::Detail("raze".into()), ..Default::default() };
+        let theirs = render(&m, &ui, WIDTH, 50).join("\n");
+        assert!(theirs.contains("ACT HISTORY") && theirs.contains("MAPS THIS ACT") && theirs.contains("RECENT MATCHES"));
+        m.players.get_mut("cypher").unwrap().name = Some(("leaked".into(), "1".into()));
+        let ui = UiState { view: View::Detail("cypher".into()), ..Default::default() };
+        let incog = render(&m, &ui, WIDTH, 50).join("\n");
+        assert!(!incog.contains("leaked"), "an incognito player's name never appears, even if known");
     }
 }
