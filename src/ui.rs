@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 use unicode_width::UnicodeWidthStr;
 
 /// Every screen is this many columns wide; narrower terminals get the too-small screen.
@@ -186,10 +187,15 @@ fn menus_screen(m: &Model) -> Screen {
 fn net_status(net: Option<&NetStats>) -> Vec<Seg> {
     let Some(net) = net else { return Vec::new() };
     let (started, finished) = (net.started.load(Ordering::Relaxed), net.finished.load(Ordering::Relaxed));
-    if started == finished {
+    let limited = net.rate_limited_until.lock().ok().and_then(|g| *g).filter(|t| *t > Instant::now());
+    if started == finished && limited.is_none() {
         return Vec::new();
     }
-    vec![s("◐ ", warn()), s(format!("loading {finished}/{started}"), warn())]
+    let mut t = format!("loading {finished}/{started}");
+    if let Some(until) = limited {
+        t.push_str(&format!(" · rate limited, retry {}s", until.saturating_duration_since(Instant::now()).as_secs() + 1));
+    }
+    vec![s("◐ ", warn()), s(t, warn())]
 }
 
 fn screen(m: &Model) -> Screen {
@@ -248,7 +254,6 @@ pub mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use std::time::Instant;
 
     pub fn render(m: &Model, w: u16, h: u16) -> Vec<String> {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();

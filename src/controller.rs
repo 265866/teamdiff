@@ -17,6 +17,10 @@ pub fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, Model> {
 }
 
 fn report(shared: &Shared, e: &anyhow::Error) {
+    // The footer counts a rate limit down instead.
+    if e.is::<crate::riot::RateLimited>() {
+        return;
+    }
     lock(shared).last_error = Some((format!("{e:#}"), Instant::now()));
 }
 
