@@ -32,7 +32,11 @@ enum Transport {
     /// Started by the first request.
     Browser { profile_dir: PathBuf, home: String, open: tokio::sync::Mutex<Option<Arc<Browser>>> },
     #[cfg(test)]
-    Canned { responses: Mutex<std::collections::VecDeque<Response>>, sent: std::sync::atomic::AtomicUsize },
+    Canned {
+        responses: Mutex<std::collections::VecDeque<Response>>,
+        sent: std::sync::atomic::AtomicUsize,
+        reloads: std::sync::atomic::AtomicUsize,
+    },
 }
 
 impl Transport {
@@ -64,9 +68,23 @@ impl Transport {
                 result
             }
             #[cfg(test)]
-            Self::Canned { responses, sent } => {
+            Self::Canned { responses, sent, .. } => {
                 sent.fetch_add(1, Ordering::Relaxed);
                 Ok(responses.lock().unwrap().pop_front().expect("a canned response for every request"))
+            }
+        }
+    }
+
+    async fn reload(&self) -> Result<()> {
+        match self {
+            Self::Browser { open, .. } => match open.lock().await.as_ref() {
+                Some(b) => b.reload(),
+                None => Ok(()),
+            },
+            #[cfg(test)]
+            Self::Canned { reloads, .. } => {
+                reloads.fetch_add(1, Ordering::Relaxed);
+                Ok(())
             }
         }
     }
@@ -77,11 +95,14 @@ pub struct Tracker {
     permits: Semaphore,
     net: Arc<NetStats>,
     dump_dir: Option<PathBuf>,
-    /// No request is sent until then, and why: when tracker.gg asked for a wait too long to hold a
-    /// request slot through.
+    /// No request is sent until then, and why: after tracker.gg refuses one twice, so a block isn't
+    /// met with a retry every few seconds, or when it asked for a wait too long to hold a request slot
+    /// through.
     paused: Mutex<Option<(Instant, &'static str)>>,
 }
 
+/// How long requests pause after tracker.gg refuses one even from a freshly loaded page.
+const BLOCK_PAUSE: Duration = Duration::from_secs(300);
 /// The longest `Retry-After` waited out inside a request; longer ones pause every request instead.
 const MAX_INLINE_WAIT: u64 = 30;
 const MAX_RETRY_AFTER: u64 = 86_400;
@@ -101,7 +122,8 @@ impl Tracker {
     /// A tracker that answers each request with the next of `responses`.
     #[cfg(test)]
     pub(crate) fn canned(responses: Vec<Response>) -> Self {
-        let transport = Transport::Canned { responses: Mutex::new(responses.into()), sent: Default::default() };
+        let transport =
+            Transport::Canned { responses: Mutex::new(responses.into()), sent: Default::default(), reloads: Default::default() };
         Self::with(transport, Arc::default(), None)
     }
 
@@ -133,6 +155,7 @@ impl Tracker {
 
     async fn get_with_retry(&self, path: &str) -> Result<Option<Value>> {
         let label = path.split('?').next().unwrap_or(path);
+        let mut reloaded = false;
         for attempt in 0..5u64 {
             let resp =
                 self.transport.get(&format!("{API}{path}")).await.with_context(|| format!("tracker.gg request failed for {label}"))?;
@@ -156,8 +179,14 @@ impl Tracker {
                 continue;
             }
             // Cloudflare's block page is a 403, or unreadable from the page (status 0) since it carries no
-            // CORS headers.
+            // CORS headers. Loading the page again lets Cloudflare check the browser, which can lift it.
             if status == 403 || status == 0 {
+                if !reloaded {
+                    reloaded = true;
+                    self.transport.reload().await?;
+                    continue;
+                }
+                self.pause(BLOCK_PAUSE, "tracker.gg refused a request");
                 bail!("tracker.gg refused the request ({}) for {label}", if status == 0 { resp.body.as_str() } else { "403" });
             }
             if status == 451 {
@@ -267,9 +296,9 @@ pub(crate) mod tests {
         Response { status, retry_after: retry_after.map(str::to_string), body: body.into() }
     }
 
-    fn sent(t: &Tracker) -> usize {
-        let Transport::Canned { sent, .. } = &t.transport else { unreachable!() };
-        sent.load(Ordering::Relaxed)
+    fn counts(t: &Tracker) -> (usize, usize) {
+        let Transport::Canned { sent, reloads, .. } = &t.transport else { unreachable!() };
+        (sent.load(Ordering::Relaxed), reloads.load(Ordering::Relaxed))
     }
 
     #[tokio::test]
@@ -278,7 +307,7 @@ pub(crate) mod tests {
         let start = Instant::now();
         let v = t.get("/x").await.unwrap();
         assert_eq!(v, Some(json!({ "data": {} })));
-        assert_eq!(sent(&t), 2);
+        assert_eq!(counts(&t).0, 2);
         assert!(start.elapsed() >= Duration::from_secs(1), "waited for Retry-After");
     }
 
@@ -288,7 +317,7 @@ pub(crate) mod tests {
             let t = Tracker::canned(vec![answer(503, retry_after, "")]);
             let err = t.get("/x").await.unwrap_err();
             assert!(err.to_string().contains("503"), "{err:#}");
-            assert_eq!(sent(&t), 1, "no retry inside the request: {retry_after:?}");
+            assert_eq!(counts(&t).0, 1, "no retry inside the request: {retry_after:?}");
         }
     }
 
@@ -301,7 +330,7 @@ pub(crate) mod tests {
             let err = t.get("/y").await.unwrap_err();
             assert!(err.to_string().contains("trying again in 60 min"), "{status}: {err:#}");
             assert!(start.elapsed() < Duration::from_secs(5), "neither call waited: {status}");
-            assert_eq!(sent(&t), 1, "the paused call sent nothing: {status}");
+            assert_eq!(counts(&t).0, 1, "the paused call sent nothing: {status}");
         }
     }
 
@@ -310,6 +339,25 @@ pub(crate) mod tests {
         let t = Tracker::canned(vec![answer(503, Some("18446744073709551615"), "")]);
         let err = t.get("/x").await.unwrap_err();
         assert!(err.to_string().contains("86400 s"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_reloads_the_page_and_tries_once_more() {
+        for refusal in [answer(0, None, "TypeError: Failed to fetch"), answer(403, None, "")] {
+            let t = Tracker::canned(vec![refusal.clone(), answer(200, None, r#"{"data":{}}"#)]);
+            assert_eq!(t.get("/x").await.unwrap(), Some(json!({ "data": {} })), "{refusal:?}");
+            assert_eq!(counts(&t), (2, 1), "one reload, then the retry went through: {refusal:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refusal_after_a_reload_pauses_every_request() {
+        let t = Tracker::canned(vec![answer(0, None, "TypeError: Failed to fetch"), answer(0, None, "TypeError: Failed to fetch")]);
+        let err = t.get("/x").await.unwrap_err();
+        assert!(err.to_string().contains("Failed to fetch"), "{err:#}");
+        let err = t.get("/y").await.unwrap_err();
+        assert!(err.to_string().contains("trying again in 5 min"), "{err:#}");
+        assert_eq!(counts(&t), (2, 1), "one reload, and nothing sent while paused");
     }
 
     #[test]

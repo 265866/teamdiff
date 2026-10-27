@@ -8,6 +8,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -25,9 +27,11 @@ use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 pub const HOME: &str = "https://tracker.gg/robots.txt";
 /// The hidden window never draws, so the GPU process (about 40 MB) isn't needed.
 const ARGS: &str = "--disable-gpu";
+/// `Browser::page` while the last page load wasn't refused.
+const PAGE_OK: i32 = -1;
 
 /// A finished request. `status` is 0 when the page couldn't read the response, as with Cloudflare's
-/// block page, which carries no CORS headers; `body` then says why.
+/// block page, which carries no CORS headers, or when the page itself was refused; `body` then says why.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     pub status: u16,
@@ -35,10 +39,17 @@ pub struct Response {
     pub body: String,
 }
 
+enum Job {
+    Get(Pending),
+    Reload,
+}
+
 pub struct Browser {
-    jobs: mpsc::Sender<Pending>,
+    jobs: mpsc::Sender<Job>,
     thread: u32,
     timeout: Duration,
+    /// The HTTP status of the last page load if it was refused (0 without one), otherwise `PAGE_OK`.
+    page: Arc<AtomicI32>,
 }
 
 impl Browser {
@@ -48,14 +59,16 @@ impl Browser {
         std::fs::create_dir_all(data_dir).with_context(|| format!("couldn't create {}", data_dir.display()))?;
         let data_dir = HSTRING::from(data_dir.as_os_str());
         let home = HSTRING::from(home);
+        let page = Arc::new(AtomicI32::new(PAGE_OK));
         let (jobs, rx) = mpsc::channel();
         let (started, started_rx) = mpsc::channel();
+        let page_status = page.clone();
         std::thread::Builder::new().name("tracker-browser".into()).spawn(move || {
             if let Err(e) = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok() {
                 let _ = started.send(Err(e.into()));
                 return;
             }
-            match Window::open(&data_dir, home) {
+            match Window::open(&data_dir, home, page_status) {
                 Ok(window) => {
                     let _ = started.send(Ok(unsafe { GetCurrentThreadId() }));
                     window.run(rx);
@@ -67,19 +80,33 @@ impl Browser {
             unsafe { CoUninitialize() };
         })?;
         let thread = started_rx.recv().context("the browser thread stopped")??;
-        Ok(Self { jobs, thread, timeout })
+        Ok(Self { jobs, thread, timeout, page })
     }
 
     /// GET `url` from the page, as its scripts would.
     pub async fn get(&self, url: &str) -> Result<Response> {
         let (reply, rx) = oneshot::channel();
-        self.jobs.send(Pending { url: url.into(), reply }).map_err(|_| anyhow!("the browser has stopped"))?;
-        unsafe { PostThreadMessageW(self.thread, WM_APP, WPARAM(0), LPARAM(0)) }.context("couldn't reach the browser")?;
+        self.post(Job::Get(Pending { url: url.into(), reply }))?;
         match tokio::time::timeout(self.timeout, rx).await {
             Ok(Ok(r)) => Ok(r),
             Ok(Err(_)) => bail!("the browser closed during the request"),
-            Err(_) => bail!("tracker.gg didn't answer within {} s", self.timeout.as_secs()),
+            // The page never loaded because the site refused it: answer as a refusal, not a stuck browser.
+            Err(_) => match self.page.load(Ordering::Relaxed) {
+                PAGE_OK => bail!("tracker.gg didn't answer within {} s", self.timeout.as_secs()),
+                0 => Ok(Response { status: 0, retry_after: None, body: "the tracker.gg page couldn't load".into() }),
+                status => Ok(Response { status: 0, retry_after: None, body: format!("the tracker.gg page didn't load (HTTP {status})") }),
+            },
         }
+    }
+
+    /// Loads the page again. Requests in flight are sent again from the new page.
+    pub fn reload(&self) -> Result<()> {
+        self.post(Job::Reload)
+    }
+
+    fn post(&self, job: Job) -> Result<()> {
+        self.jobs.send(job).map_err(|_| anyhow!("the browser has stopped"))?;
+        unsafe { PostThreadMessageW(self.thread, WM_APP, WPARAM(0), LPARAM(0)) }.context("couldn't reach the browser")
     }
 }
 
@@ -122,7 +149,7 @@ struct Window {
 }
 
 impl Window {
-    fn open(data_dir: &HSTRING, home: HSTRING) -> Result<Self> {
+    fn open(data_dir: &HSTRING, home: HSTRING, page: Arc<AtomicI32>) -> Result<Self> {
         let hwnd = hidden_window()?;
         let environment = {
             let (tx, rx) = mpsc::channel();
@@ -170,19 +197,39 @@ impl Window {
             webview
         };
         let window = Self { hwnd, controller, webview, home, state: Rc::default() };
-        window.listen()?;
+        window.listen(page)?;
         Ok(window)
     }
 
-    fn listen(&self) -> Result<()> {
+    fn listen(&self, page: Arc<AtomicI32>) -> Result<()> {
         let mut token = 0i64;
         let state = self.state.clone();
+        let starting = NavigationStartingEventHandler::create(Box::new(move |_, _| {
+            let mut s = state.borrow_mut();
+            s.ready = false;
+            s.loading = true;
+            // Requests sent from the old page will never answer; they go out again from the new one.
+            // A late answer from the old page carries an id that's gone and is ignored.
+            let sent: Vec<Pending> = s.sent.drain().map(|(_, p)| p).collect();
+            s.waiting.extend(sent);
+            s.headers_seen.clear();
+            Ok(())
+        }));
+        let state = self.state.clone();
         let completed = NavigationCompletedEventHandler::create(Box::new(move |webview, args| {
-            let ok = args.is_some_and(|a| {
+            let status = args.as_ref().and_then(|a| a.cast::<ICoreWebView2NavigationCompletedEventArgs2>().ok()).map(|a| {
+                let mut status = 0;
+                let _ = unsafe { a.HttpStatusCode(&mut status) };
+                status
+            });
+            let success = args.is_some_and(|a| {
                 let mut ok = Default::default();
                 unsafe { a.IsSuccess(&mut ok) }.is_ok() && ok.as_bool()
             });
-            // After a failed load, waiting requests stay queued until they time out.
+            let ok = success && status.is_none_or(|s| s < 400);
+            page.store(if ok { PAGE_OK } else { status.unwrap_or(0).max(0) }, Ordering::Relaxed);
+            // After a refused load, waiting requests stay queued: a Cloudflare check page is refused,
+            // then loads the real page once it passes. Otherwise they time out as refused.
             let waiting = {
                 let mut s = state.borrow_mut();
                 s.loading = false;
@@ -258,6 +305,7 @@ impl Window {
             Ok(())
         }));
         unsafe {
+            self.webview.add_NavigationStarting(&starting, &mut token)?;
             self.webview.add_NavigationCompleted(&completed, &mut token)?;
             self.webview.cast::<ICoreWebView2_2>()?.add_WebResourceResponseReceived(&response, &mut token)?;
             self.webview.add_WebMessageReceived(&message, &mut token)?;
@@ -265,13 +313,13 @@ impl Window {
         Ok(())
     }
 
-    fn run(self, jobs: mpsc::Receiver<Pending>) {
+    fn run(self, jobs: mpsc::Receiver<Job>) {
         let mut msg = MSG::default();
         // GetMessageW returns 0 for WM_QUIT and -1 on error.
         while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
             if msg.hwnd.is_invalid() && msg.message == WM_APP {
-                for pending in jobs.try_iter() {
-                    self.handle(pending);
+                for job in jobs.try_iter() {
+                    self.handle(job);
                 }
                 continue;
             }
@@ -282,15 +330,22 @@ impl Window {
         }
     }
 
-    fn handle(&self, pending: Pending) {
-        if self.state.borrow().ready {
-            send(&self.webview, &self.state, pending);
-            return;
-        }
-        let load = {
-            let mut s = self.state.borrow_mut();
-            s.waiting.push(pending);
-            !std::mem::replace(&mut s.loading, true)
+    fn handle(&self, job: Job) {
+        let load = match job {
+            Job::Get(pending) => {
+                if self.state.borrow().ready {
+                    send(&self.webview, &self.state, pending);
+                    return;
+                }
+                let mut s = self.state.borrow_mut();
+                s.waiting.push(pending);
+                !std::mem::replace(&mut s.loading, true)
+            }
+            Job::Reload => {
+                let mut s = self.state.borrow_mut();
+                s.ready = false;
+                !std::mem::replace(&mut s.loading, true)
+            }
         };
         if load && unsafe { self.webview.Navigate(&self.home) }.is_err() {
             self.state.borrow_mut().loading = false;
@@ -392,9 +447,12 @@ pub(crate) mod tests {
                         }
                     }
                     let path = String::from_utf8_lossy(&request).split(' ').nth(1).unwrap_or("").to_string();
+                    if path == "/slow" {
+                        tokio::time::sleep(Duration::from_millis(800)).await;
+                    }
                     let (status, extra, body) = match path.as_str() {
                         "/" => ("200 OK", "Content-Type: text/html\r\n".to_string(), "<p>home</p>"),
-                        "/data" => ("200 OK", format!("Content-Type: application/json\r\n{cors}"), r#"{"ok":1}"#),
+                        "/data" | "/slow" => ("200 OK", format!("Content-Type: application/json\r\n{cors}"), r#"{"ok":1}"#),
                         p if p.starts_with("/busy") => ("503 Service Unavailable", format!("Retry-After: 7\r\n{cors}"), ""),
                         "/blocked" => ("403 Forbidden", "Content-Type: text/html\r\n".to_string(), "<p>blocked</p>"),
                         _ => ("404 Not Found", cors, ""),
@@ -452,5 +510,30 @@ pub(crate) mod tests {
         let blocked = b.get(&format!("{api}/blocked")).await.unwrap();
         assert_eq!(blocked.status, 0, "a block page without CORS headers can't be read: {blocked:?}");
         drop(b);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_reload_sends_requests_in_flight_again() {
+        let (page, api) = site().await;
+        let profile = Profile::new("reload-test");
+        let b = Arc::new(Browser::start(&profile.0, &format!("{page}/"), Duration::from_secs(20)).unwrap());
+        assert_eq!(b.get(&format!("{api}/data")).await.unwrap().status, 200);
+        let slow = tokio::spawn({
+            let (b, url) = (b.clone(), format!("{api}/slow"));
+            async move { b.get(&url).await }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        b.reload().unwrap();
+        assert_eq!(slow.await.unwrap().unwrap().status, 200, "sent again from the reloaded page");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_page_answers_as_a_refusal() {
+        let (page, api) = site().await;
+        let profile = Profile::new("refused-test");
+        let b = Browser::start(&profile.0, &format!("{page}/blocked"), Duration::from_secs(20)).unwrap();
+        let r = b.get(&format!("{api}/data")).await.unwrap();
+        assert_eq!(r.status, 0);
+        assert!(r.body.contains("HTTP 403"), "{r:?}");
     }
 }
