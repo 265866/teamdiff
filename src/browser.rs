@@ -18,7 +18,7 @@ use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUn
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{HSTRING, PCWSTR, PWSTR, w};
+use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
 /// The page the browser sits on: a tracker.gg page with no scripts or ads, so the browser stays small.
 /// Requests sent from it carry tracker.gg's origin and cookies, as the site's own do.
@@ -31,6 +31,7 @@ const ARGS: &str = "--disable-gpu";
 #[derive(Debug, Clone, PartialEq)]
 pub struct Response {
     pub status: u16,
+    pub retry_after: Option<String>,
     pub body: String,
 }
 
@@ -103,6 +104,11 @@ struct State {
     waiting: Vec<Pending>,
     sent: HashMap<u64, Pending>,
     next_id: u64,
+    /// Retry-After matters only on a 429 or 503, and tracker.gg doesn't expose it to the page, so it's
+    /// read from the full response, whose event can come before or after the page's answer. Whichever
+    /// comes first waits here for the other, by URL.
+    headers_seen: HashMap<String, Option<String>>,
+    awaiting_headers: HashMap<String, (oneshot::Sender<Response>, Response)>,
 }
 
 /// The browser thread's side: a hidden window holding the WebView. Everything here runs on that
@@ -191,6 +197,33 @@ impl Window {
             Ok(())
         }));
         let state = self.state.clone();
+        let response = WebResourceResponseReceivedEventHandler::create(Box::new(move |_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let (url, status, retry_after) = unsafe {
+                let (mut url, mut status, mut value) = (PWSTR::null(), 0, PWSTR::null());
+                args.Request()?.Uri(&mut url)?;
+                let response = args.Response()?;
+                response.StatusCode(&mut status)?;
+                let retry_after =
+                    response.Headers()?.GetHeader(w!("retry-after"), &mut value).ok().map(|_| CoTaskMemPWSTR::from(value).to_string());
+                (CoTaskMemPWSTR::from(url).to_string(), status, retry_after)
+            };
+            if status != 429 && status != 503 {
+                return Ok(());
+            }
+            let mut s = state.borrow_mut();
+            match s.awaiting_headers.remove(&url) {
+                Some((reply, response)) => {
+                    let _ = reply.send(Response { retry_after, ..response });
+                }
+                None if s.sent.values().any(|p| p.url == url) => {
+                    s.headers_seen.insert(url, retry_after);
+                }
+                None => {}
+            }
+            Ok(())
+        }));
+        let state = self.state.clone();
         let message = WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
             let Some(args) = args else { return Ok(()) };
             let mut json = PWSTR::null();
@@ -198,13 +231,35 @@ impl Window {
             let json = CoTaskMemPWSTR::from(json).to_string();
             let Ok(v) = serde_json::from_str::<Value>(&json) else { return Ok(()) };
             let mut s = state.borrow_mut();
-            let Some(Pending { reply, .. }) = v["id"].as_u64().and_then(|id| s.sent.remove(&id)) else { return Ok(()) };
-            let _ = reply
-                .send(Response { status: v["status"].as_u64().unwrap_or(0) as u16, body: v["body"].as_str().unwrap_or("").to_string() });
+            let Some(Pending { url, reply, .. }) = v["id"].as_u64().and_then(|id| s.sent.remove(&id)) else { return Ok(()) };
+            let response = Response {
+                status: v["status"].as_u64().unwrap_or(0) as u16,
+                retry_after: None,
+                body: v["body"].as_str().unwrap_or("").to_string(),
+            };
+            // Every answer takes its URL's headers, so none are left for a later request.
+            let seen = s.headers_seen.remove(&url);
+            if response.status != 429 && response.status != 503 {
+                let _ = reply.send(response);
+                return Ok(());
+            }
+            match seen {
+                Some(retry_after) => {
+                    let _ = reply.send(Response { retry_after, ..response });
+                }
+                None => {
+                    // Callers never fetch one URL twice at once; if one did, the earlier answer goes
+                    // out without its header rather than being lost.
+                    if let Some((earlier, earlier_response)) = s.awaiting_headers.insert(url, (reply, response)) {
+                        let _ = earlier.send(earlier_response);
+                    }
+                }
+            }
             Ok(())
         }));
         unsafe {
             self.webview.add_NavigationCompleted(&completed, &mut token)?;
+            self.webview.cast::<ICoreWebView2_2>()?.add_WebResourceResponseReceived(&response, &mut token)?;
             self.webview.add_WebMessageReceived(&message, &mut token)?;
         }
         Ok(())
@@ -340,6 +395,7 @@ pub(crate) mod tests {
                     let (status, extra, body) = match path.as_str() {
                         "/" => ("200 OK", "Content-Type: text/html\r\n".to_string(), "<p>home</p>"),
                         "/data" => ("200 OK", format!("Content-Type: application/json\r\n{cors}"), r#"{"ok":1}"#),
+                        p if p.starts_with("/busy") => ("503 Service Unavailable", format!("Retry-After: 7\r\n{cors}"), ""),
                         "/blocked" => ("403 Forbidden", "Content-Type: text/html\r\n".to_string(), "<p>blocked</p>"),
                         _ => ("404 Not Found", cors, ""),
                     };
@@ -380,12 +436,18 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_page_reports_status_and_body() {
+    async fn the_page_reports_status_retry_after_and_body() {
         let (page, api) = site().await;
         let profile = Profile::new("browser-test");
         let b = Browser::start(&profile.0, &format!("{page}/"), Duration::from_secs(20)).unwrap();
         let ok = b.get(&format!("{api}/data")).await.unwrap();
-        assert_eq!(ok, Response { status: 200, body: r#"{"ok":1}"#.into() });
+        assert_eq!(ok, Response { status: 200, retry_after: None, body: r#"{"ok":1}"#.into() });
+        // The full response and the page's answer arrive in either order.
+        // Every other URL has the shape of the app's: an escaped `#` and an empty query.
+        for i in 0..20 {
+            let busy = b.get(&format!("{api}{}", if i % 2 == 0 { "/busy" } else { "/busy/a%23b?" })).await.unwrap();
+            assert_eq!((busy.status, busy.retry_after.as_deref()), (503, Some("7")), "read from the full response, not the page");
+        }
         assert_eq!(b.get(&format!("{api}/nope")).await.unwrap().status, 404);
         let blocked = b.get(&format!("{api}/blocked")).await.unwrap();
         assert_eq!(blocked.status, 0, "a block page without CORS headers can't be read: {blocked:?}");

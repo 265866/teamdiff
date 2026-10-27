@@ -8,9 +8,9 @@ use crate::riot::{NetStats, dump};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 
 const API: &str = "https://api.tracker.gg/api/v2/valorant/standard";
@@ -32,7 +32,7 @@ enum Transport {
     /// Started by the first request.
     Browser { profile_dir: PathBuf, home: String, open: tokio::sync::Mutex<Option<Arc<Browser>>> },
     #[cfg(test)]
-    Canned(std::sync::Mutex<std::collections::VecDeque<Response>>),
+    Canned { responses: Mutex<std::collections::VecDeque<Response>>, sent: std::sync::atomic::AtomicUsize },
 }
 
 impl Transport {
@@ -64,7 +64,10 @@ impl Transport {
                 result
             }
             #[cfg(test)]
-            Self::Canned(responses) => Ok(responses.lock().unwrap().pop_front().expect("a canned response for every request")),
+            Self::Canned { responses, sent } => {
+                sent.fetch_add(1, Ordering::Relaxed);
+                Ok(responses.lock().unwrap().pop_front().expect("a canned response for every request"))
+            }
         }
     }
 }
@@ -74,8 +77,14 @@ pub struct Tracker {
     permits: Semaphore,
     net: Arc<NetStats>,
     dump_dir: Option<PathBuf>,
+    /// No request is sent until then, and why: when tracker.gg asked for a wait too long to hold a
+    /// request slot through.
+    paused: Mutex<Option<(Instant, &'static str)>>,
 }
 
+/// The longest `Retry-After` waited out inside a request; longer ones pause every request instead.
+const MAX_INLINE_WAIT: u64 = 30;
+const MAX_RETRY_AFTER: u64 = 86_400;
 /// How long the browser may take to start, and a request to answer, page load included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -86,20 +95,35 @@ impl Tracker {
     }
 
     fn with(transport: Transport, net: Arc<NetStats>, dump_dir: Option<PathBuf>) -> Self {
-        Self { transport, permits: Semaphore::new(2), net, dump_dir }
+        Self { transport, permits: Semaphore::new(2), net, dump_dir, paused: Mutex::default() }
     }
 
     /// A tracker that answers each request with the next of `responses`.
     #[cfg(test)]
     pub(crate) fn canned(responses: Vec<Response>) -> Self {
-        Self::with(Transport::Canned(std::sync::Mutex::new(responses.into())), Arc::default(), None)
+        let transport = Transport::Canned { responses: Mutex::new(responses.into()), sent: Default::default() };
+        Self::with(transport, Arc::default(), None)
+    }
+
+    /// Pauses requests for `wait`, unless an existing pause already lasts longer.
+    fn pause(&self, wait: Duration, why: &'static str) {
+        let until = Instant::now() + wait;
+        let mut paused = self.paused.lock().unwrap_or_else(|e| e.into_inner());
+        if paused.is_none_or(|(t, _)| until > t) {
+            *paused = Some((until, why));
+        }
     }
 
     /// GET on tracker.gg's API. `Ok(None)` means 404: no such player, or no data of that kind.
     async fn get(&self, path: &str) -> Result<Option<Value>> {
         let _permit = self.permits.acquire().await?;
+        if let Some((until, why)) = *self.paused.lock().unwrap_or_else(|e| e.into_inner())
+            && until > Instant::now()
+        {
+            bail!("{why}; trying again in {} min", until.saturating_duration_since(Instant::now()).as_secs().div_ceil(60));
+        }
         self.net.started.fetch_add(1, Ordering::Relaxed);
-        let result = self.request(path).await;
+        let result = self.get_with_retry(path).await;
         self.net.finished.fetch_add(1, Ordering::Relaxed);
         if let Ok(Some(v)) = &result {
             dump(self.dump_dir.as_deref(), &format!("tracker{}", path.split('?').next().unwrap_or(path)), v);
@@ -107,25 +131,44 @@ impl Tracker {
         result
     }
 
-    async fn request(&self, path: &str) -> Result<Option<Value>> {
+    async fn get_with_retry(&self, path: &str) -> Result<Option<Value>> {
         let label = path.split('?').next().unwrap_or(path);
-        let resp = self.transport.get(&format!("{API}{path}")).await.with_context(|| format!("tracker.gg request failed for {label}"))?;
-        let status = resp.status;
-        if status == 404 {
-            return Ok(None);
+        for attempt in 0..5u64 {
+            let resp =
+                self.transport.get(&format!("{API}{path}")).await.with_context(|| format!("tracker.gg request failed for {label}"))?;
+            let status = resp.status;
+            if status == 404 {
+                return Ok(None);
+            }
+            // Only the seconds form of Retry-After is read; an HTTP date counts as no header. Capped at a
+            // day so an absurd value can't overflow the deadline.
+            let retry_after = resp.retry_after.as_deref().and_then(|s| s.trim().parse::<u64>().ok()).map(|s| s.min(MAX_RETRY_AFTER));
+            // A 503 is retried here only when the server says when; otherwise the caller retries later.
+            if status == 429 || (status == 503 && retry_after.is_some()) {
+                let wait = retry_after.unwrap_or(5 * (attempt + 1));
+                let until = Instant::now() + Duration::from_secs(wait);
+                *self.net.rate_limited_until.lock().unwrap_or_else(|e| e.into_inner()) = Some(until);
+                if wait > MAX_INLINE_WAIT {
+                    self.pause(Duration::from_secs(wait), "tracker.gg asked to wait");
+                    bail!("tracker.gg asked to wait {wait} s ({status}) on {label}");
+                }
+                tokio::time::sleep_until(until.into()).await;
+                continue;
+            }
+            // Cloudflare's block page is a 403, or unreadable from the page (status 0) since it carries no
+            // CORS headers.
+            if status == 403 || status == 0 {
+                bail!("tracker.gg refused the request ({}) for {label}", if status == 0 { resp.body.as_str() } else { "403" });
+            }
+            if status == 451 {
+                return Err(Private.into());
+            }
+            if !(200..300).contains(&status) {
+                bail!("{status} from tracker.gg {label}");
+            }
+            return Ok(Some(serde_json::from_str(&resp.body).with_context(|| format!("tracker.gg {label} isn't JSON"))?));
         }
-        // Cloudflare's block page is a 403, or unreadable from the page (status 0) since it carries no
-        // CORS headers.
-        if status == 403 || status == 0 {
-            bail!("tracker.gg refused the request ({}) for {label}", if status == 0 { resp.body.as_str() } else { "403" });
-        }
-        if status == 451 {
-            return Err(Private.into());
-        }
-        if !(200..300).contains(&status) {
-            bail!("{status} from tracker.gg {label}");
-        }
-        Ok(Some(serde_json::from_str(&resp.body).with_context(|| format!("tracker.gg {label} isn't JSON"))?))
+        bail!("tracker.gg still asks to wait (429/503) on {label}")
     }
 
     pub async fn profile(&self, riot_id: &str) -> Result<Option<Value>> {
@@ -220,7 +263,64 @@ pub(crate) mod tests {
         assert_eq!(parse_profile(&json!({ "data": { "segments": [] } }), "a6"), Profile::default());
     }
 
-    pub(crate) fn answer(status: u16, body: &str) -> Response {
-        Response { status, body: body.into() }
+    pub(crate) fn answer(status: u16, retry_after: Option<&str>, body: &str) -> Response {
+        Response { status, retry_after: retry_after.map(str::to_string), body: body.into() }
+    }
+
+    fn sent(t: &Tracker) -> usize {
+        let Transport::Canned { sent, .. } = &t.transport else { unreachable!() };
+        sent.load(Ordering::Relaxed)
+    }
+
+    #[tokio::test]
+    async fn a_503_with_retry_after_waits_then_retries() {
+        let t = Tracker::canned(vec![answer(503, Some("1"), ""), answer(200, None, r#"{"data":{}}"#)]);
+        let start = Instant::now();
+        let v = t.get("/x").await.unwrap();
+        assert_eq!(v, Some(json!({ "data": {} })));
+        assert_eq!(sent(&t), 2);
+        assert!(start.elapsed() >= Duration::from_secs(1), "waited for Retry-After");
+    }
+
+    #[tokio::test]
+    async fn a_503_without_a_seconds_retry_after_fails_for_the_caller_to_retry() {
+        for retry_after in [None, Some("Wed, 21 Oct 2026 07:28:00 GMT")] {
+            let t = Tracker::canned(vec![answer(503, retry_after, "")]);
+            let err = t.get("/x").await.unwrap_err();
+            assert!(err.to_string().contains("503"), "{err:#}");
+            assert_eq!(sent(&t), 1, "no retry inside the request: {retry_after:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_long_retry_after_pauses_every_request_instead_of_holding_a_slot() {
+        for status in [429, 503] {
+            let t = Tracker::canned(vec![answer(status, Some("3600"), "")]);
+            let start = Instant::now();
+            assert!(t.get("/x").await.unwrap_err().to_string().contains("3600 s"), "{status}");
+            let err = t.get("/y").await.unwrap_err();
+            assert!(err.to_string().contains("trying again in 60 min"), "{status}: {err:#}");
+            assert!(start.elapsed() < Duration::from_secs(5), "neither call waited: {status}");
+            assert_eq!(sent(&t), 1, "the paused call sent nothing: {status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_absurd_retry_after_is_capped_instead_of_overflowing() {
+        let t = Tracker::canned(vec![answer(503, Some("18446744073709551615"), "")]);
+        let err = t.get("/x").await.unwrap_err();
+        assert!(err.to_string().contains("86400 s"), "{err:#}");
+    }
+
+    #[test]
+    fn a_shorter_pause_never_cuts_a_longer_one() {
+        let t = Tracker::canned(Vec::new());
+        t.pause(Duration::from_secs(300), "blocked");
+        t.pause(Duration::from_secs(45), "asked to wait");
+        let (until, why) = t.paused.lock().unwrap().unwrap();
+        assert_eq!(why, "blocked");
+        assert!(until > Instant::now() + Duration::from_secs(290));
+        t.pause(Duration::from_secs(600), "asked to wait");
+        assert_eq!(t.paused.lock().unwrap().unwrap().1, "asked to wait", "a longer pause still extends it");
     }
 }
