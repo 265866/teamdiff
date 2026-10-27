@@ -84,9 +84,16 @@ impl Browser {
     }
 
     /// GET `url` from the page, as its scripts would.
+    #[cfg(test)]
     pub async fn get(&self, url: &str) -> Result<Response> {
+        self.get_trimmed(url, None).await
+    }
+
+    /// GET `url` from the page. `trim`, a JavaScript function, cuts a successful JSON body down in the
+    /// page, so a large response never reaches the app whole.
+    pub async fn get_trimmed(&self, url: &str, trim: Option<&'static str>) -> Result<Response> {
         let (reply, rx) = oneshot::channel();
-        self.post(Job::Get(Pending { url: url.into(), reply }))?;
+        self.post(Job::Get(Pending { url: url.into(), trim, reply }))?;
         match tokio::time::timeout(self.timeout, rx).await {
             Ok(Ok(r)) => Ok(r),
             Ok(Err(_)) => bail!("the browser closed during the request"),
@@ -120,6 +127,7 @@ impl Drop for Browser {
 
 struct Pending {
     url: String,
+    trim: Option<&'static str>,
     reply: oneshot::Sender<Response>,
 }
 
@@ -378,12 +386,20 @@ fn send(webview: &ICoreWebView2, state: &Rc<RefCell<State>>, pending: Pending) {
   const post = (m) => window.chrome.webview.postMessage(Object.assign({{ id: {id} }}, m));
   try {{
     const r = await fetch({url}, {{ credentials: "include", headers: {{ accept: "application/json, text/plain, */*" }} }});
-    post({{ status: r.status, body: await r.text() }});
+    const trim = {trim};
+    let body = await r.text();
+    // A body the trim can't read is passed on as the error text, not as a failed request, which
+    // would look like a block.
+    if (r.ok && trim) {{
+      try {{ body = JSON.stringify(trim(JSON.parse(body))); }} catch (e) {{ body = "unreadable: " + String(e); }}
+    }}
+    post({{ status: r.status, body }});
   }} catch (e) {{
     post({{ status: 0, body: String(e) }});
   }}
 }})();"#,
         url = Value::from(pending.url.as_str()),
+        trim = pending.trim.unwrap_or("null"),
     );
     state.borrow_mut().sent.insert(id, pending);
     let done = ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
@@ -425,6 +441,14 @@ pub(crate) mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    /// A finished match as tracker.gg's `/matches/{id}` returns it, cut to what the trim reads.
+    const MATCH: &str = r#"{"data":{"segments":[
+        {"type":"player-summary","attributes":{"platformUserIdentifier":"A#1"},"metadata":{"teamId":"Red","partyId":"1","agentName":"Jett"}},
+        {"type":"player-summary","attributes":{"platformUserIdentifier":"B#2"},"metadata":{"teamId":"Red","partyId":"1"}},
+        {"type":"player-summary","attributes":{"platformUserIdentifier":"C#3"},"metadata":{"teamId":"Blue","partyId":"1"}},
+        {"type":"round-summary","attributes":{},"metadata":{}}
+    ]}}"#;
+
     /// A local site on 127.0.0.1 whose API is called from `localhost`, a different origin, the way
     /// tracker.gg's page calls api.tracker.gg: CORS applies and Retry-After isn't exposed to the page.
     /// Returns (page origin, API origin).
@@ -455,6 +479,9 @@ pub(crate) mod tests {
                         "/data" | "/slow" => ("200 OK", format!("Content-Type: application/json\r\n{cors}"), r#"{"ok":1}"#),
                         p if p.starts_with("/busy") => ("503 Service Unavailable", format!("Retry-After: 7\r\n{cors}"), ""),
                         "/blocked" => ("403 Forbidden", "Content-Type: text/html\r\n".to_string(), "<p>blocked</p>"),
+                        "/match" => ("200 OK", format!("Content-Type: application/json\r\n{cors}"), MATCH),
+                        "/empty" => ("200 OK", format!("Content-Type: application/json\r\n{cors}"), "{}"),
+                        "/html" => ("200 OK", format!("Content-Type: text/html\r\n{cors}"), "<p>not json</p>"),
                         _ => ("404 Not Found", cors, ""),
                     };
                     let response = format!("HTTP/1.1 {status}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
@@ -507,9 +534,31 @@ pub(crate) mod tests {
             assert_eq!((busy.status, busy.retry_after.as_deref()), (503, Some("7")), "read from the full response, not the page");
         }
         assert_eq!(b.get(&format!("{api}/nope")).await.unwrap().status, 404);
+        let trim = Some("(v) => ({ n: v.ok + 1 })");
+        assert_eq!(b.get_trimmed(&format!("{api}/data"), trim).await.unwrap().body, r#"{"n":2}"#, "cut down in the page");
+        let nope = b.get_trimmed(&format!("{api}/nope"), trim).await.unwrap();
+        assert_eq!((nope.status, nope.body.as_str()), (404, ""), "an error body isn't trimmed");
+        let html = b.get_trimmed(&format!("{api}/html"), trim).await.unwrap();
+        assert_eq!(html.status, 200, "a body the trim can't read isn't a failed request: {html:?}");
+        assert!(html.body.starts_with("unreadable"), "{html:?}");
         let blocked = b.get(&format!("{api}/blocked")).await.unwrap();
         assert_eq!(blocked.status, 0, "a block page without CORS headers can't be read: {blocked:?}");
         drop(b);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_match_trim_keeps_players_teams_and_parties() {
+        let (page, api) = site().await;
+        let profile = Profile::new("trim-test");
+        let b = Browser::start(&profile.0, &format!("{page}/"), Duration::from_secs(20)).unwrap();
+        let trim = Some(crate::tracker::MATCH_PLAYERS);
+        let r = b.get_trimmed(&format!("{api}/match"), trim).await.unwrap();
+        assert!(!r.body.contains("agentName") && !r.body.contains("round-summary"), "{}", r.body);
+        let v: Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(crate::tracker::parse_match_parties(&v), [vec!["a#1".to_string(), "b#2".to_string()]]);
+        let empty = b.get_trimmed(&format!("{api}/empty"), trim).await.unwrap();
+        let v: Value = serde_json::from_str(&empty.body).unwrap();
+        assert!(crate::tracker::parse_match_parties(&v).is_empty(), "an unexpected shape reads as no parties: {}", empty.body);
     }
 
     #[tokio::test(flavor = "multi_thread")]

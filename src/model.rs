@@ -153,6 +153,8 @@ pub struct PlayerData {
     pub recent: Load<Vec<RecentMatch>>,
     /// Every match in the player's tracker.gg history, for spotting who they queue with.
     pub sides: Vec<MatchSide>,
+    /// Their newest match on tracker.gg, whose parties are in `Model::match_parties`.
+    pub last_match: Option<String>,
     /// Older acts, loaded when the player's details are opened.
     pub history: Vec<ActStats>,
 }
@@ -184,6 +186,8 @@ pub struct Model {
     pub presences: HashMap<String, Presence>,
     pub postgame: Option<Postgame>,
     pub my_goldstars: Option<PlayerGoldstars>,
+    /// Parties in past matches by match id, as lowercase Riot IDs.
+    pub match_parties: HashMap<String, Vec<Vec<String>>>,
     /// The latest request failure and when it happened; shown briefly in the footer.
     pub last_error: Option<(String, Instant)>,
     pub net: Option<Arc<NetStats>>,
@@ -203,6 +207,7 @@ impl Model {
             presences: HashMap::new(),
             postgame: None,
             my_goldstars: None,
+            match_parties: HashMap::new(),
             last_error: None,
             net: None,
         }
@@ -301,19 +306,28 @@ impl Model {
 
     /// Parties guessed from tracker.gg histories. Teammates in this match almost certainly queued
     /// together when they were also teammates in at least `LIKELY_PARTY_MATCHES` of their recent
-    /// matches. Incognito players are never matched: their names are never asked for.
+    /// matches, or partied in one player's last match; that needs only that player's profile public.
+    /// Incognito players are never matched: their names are never asked for.
     fn likely_parties(&self) -> Vec<Vec<String>> {
         let Some(lobby) = &self.lobby else { return Vec::new() };
         let empty = PlayerData::default();
-        let slots: Vec<(&Slot, HashSet<&MatchSide>)> = lobby
+        let slots: Vec<(&Slot, &PlayerData, HashSet<&MatchSide>)> = lobby
             .slots
             .iter()
             .filter(|s| !s.incognito)
             .map(|s| {
                 let d = self.players.get(&s.puuid).unwrap_or(&empty);
-                (s, d.sides.iter().collect())
+                (s, d, d.sides.iter().collect())
             })
             .collect();
+        let riot_id = |d: &PlayerData| d.name.as_ref().map(|(n, t)| format!("{n}#{t}").to_lowercase());
+        // Who partied in each player's last match, by the other player's index.
+        let partied = |a: usize, b: usize| {
+            let (Some(last), Some(me), Some(them)) = (&slots[a].1.last_match, riot_id(slots[a].1), riot_id(slots[b].1)) else {
+                return false;
+            };
+            self.match_parties.get(last).is_some_and(|ps| ps.iter().any(|p| p.contains(&me) && p.contains(&them)))
+        };
         // Union-find over players, by index into `slots`.
         let mut group: Vec<usize> = (0..slots.len()).collect();
         fn root(group: &mut [usize], i: usize) -> usize {
@@ -326,8 +340,9 @@ impl Model {
         }
         for a in 0..slots.len() {
             for b in a + 1..slots.len() {
-                let ((sa, ha), (sb, hb)) = (&slots[a], &slots[b]);
-                if sa.side == sb.side && ha.intersection(hb).count() >= LIKELY_PARTY_MATCHES {
+                let ((sa, _, ha), (sb, _, hb)) = (&slots[a], &slots[b]);
+                let together = ha.intersection(hb).count() >= LIKELY_PARTY_MATCHES || partied(a, b) || partied(b, a);
+                if sa.side == sb.side && together {
                     let (ra, rb) = (root(&mut group, a), root(&mut group, b));
                     group[ra.max(rb)] = ra.min(rb);
                 }
@@ -530,6 +545,41 @@ mod tests {
         m.phase = Phase::Pregame;
         let own = m.parties();
         assert_eq!((own.len(), own["me"].as_str(), own["mate"].as_str()), (2, "mine", "mine"), "agent select shows only your own party");
+    }
+
+    #[test]
+    fn a_party_in_one_players_last_match_is_a_likely_party_even_with_a_private_partner() {
+        let mut m = Model::new(Arc::default());
+        m.me = "me".into();
+        m.phase = Phase::Ingame;
+        let slot = |puuid: &str, side: Side| Slot {
+            puuid: puuid.into(),
+            side,
+            agent_id: None,
+            pick: Pick::Locked,
+            incognito: false,
+            hide_level: false,
+            level: None,
+        };
+        let mut hidden = slot("hidden", Side::Ally);
+        hidden.incognito = true;
+        let slots = vec![slot("me", Side::Ally), slot("pub", Side::Ally), slot("priv", Side::Ally), slot("other", Side::Enemy), hidden];
+        m.lobby = Some(Lobby { match_id: "now".into(), map_url: String::new(), queue: "competitive".into(), slots, phase_ends: None });
+        let named = |n: &str| PlayerData { name: Some((n.into(), "TAG".into())), ..Default::default() };
+        m.players.insert("pub".into(), PlayerData { last_match: Some("last".into()), ..named("Pub") });
+        // Private on tracker.gg: no history of their own.
+        m.players.insert("priv".into(), named("Priv"));
+        m.players.insert("other".into(), named("Other"));
+        // Named from an earlier match, but incognito in this one.
+        m.players.insert("hidden".into(), named("Hidden"));
+        m.match_parties.insert("last".into(), vec![vec!["pub#tag".into(), "priv#tag".into(), "other#tag".into(), "hidden#tag".into()]]);
+        let parties = m.parties();
+        assert_eq!(parties.get("pub"), parties.get("priv"));
+        assert!(parties["pub"].starts_with(LIKELY_PARTY));
+        assert!(!parties.contains_key("other"), "on the other team now");
+        assert!(!parties.contains_key("hidden"), "incognito now, so never matched");
+        m.match_parties.clear();
+        assert!(m.parties().is_empty(), "nothing until the match loads");
     }
 
     fn presence(puuid: &str, party: &str) -> Presence {

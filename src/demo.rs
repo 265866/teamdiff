@@ -144,6 +144,7 @@ fn player_data(p: &P) -> PlayerData {
         recent: Load::Ready(recent),
         history,
         sides: Vec::new(),
+        last_match: None,
     }
 }
 
