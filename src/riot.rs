@@ -1,8 +1,8 @@
 //! HTTP access to the Riot Client's local API and Riot's game servers.
 //!
-//! Every call here is a read the game client itself makes: the lobby and Riot IDs. Nothing here asks
-//! about another player's stats; those come from tracker.gg. The only PUT is the name lookup, which
-//! takes a list of player ids and changes nothing.
+//! Every call here is a read the game client itself makes: the lobby, Riot IDs, and your own match
+//! results. Nothing here asks about another player's stats; those come from tracker.gg. The only PUT is
+//! the name lookup, which takes a list of player ids and changes nothing.
 
 use crate::local_files::{GameLogInfo, Lockfile, game_log_path, lockfile_path, parse_game_log, parse_lockfile};
 use crate::presence::{Presence, parse_presences};
@@ -219,6 +219,10 @@ impl Riot {
 
     pub async fn coregame_match(&self, id: &str) -> Result<Option<Value>> {
         self.get(Host::Glz, &format!("/core-game/v1/matches/{id}")).await
+    }
+
+    pub async fn match_details(&self, id: &str) -> Result<Option<Value>> {
+        self.get(Host::Pd, &format!("/match-details/v1/matches/{id}")).await
     }
 
     /// Riot ids for the given players, as (puuid, name, tag).

@@ -27,7 +27,7 @@ USAGE:
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
     --demo         Show sample data instead of connecting; Tab cycles screens
-                   (waiting, menus, agent-select, loading, in-game)
+                   (waiting, menus, agent-select, loading, in-game, victory, defeat)
     -h, --help     Show this help
 
 KEYS:
@@ -110,7 +110,7 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
     let mut last_phase = None;
     let result = (|| -> Result<()> {
         loop {
-            {
+            let animating = {
                 let mut m = controller::lock(&shared);
                 if last_phase.as_ref() != Some(&m.phase) {
                     // A new phase shows other players, so a details view from the last one closes.
@@ -120,8 +120,10 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
                     last_phase = Some(m.phase.clone());
                 }
                 terminal.draw(|f| ui::draw(f, &m, &ui))?;
-            }
-            if !event::poll(Duration::from_millis(250))? {
+                ui::animating(&m)
+            };
+            let wait = Duration::from_millis(if animating { 50 } else { 250 });
+            if !event::poll(wait)? {
                 continue;
             }
             let Event::Key(key) = event::read()? else { continue };

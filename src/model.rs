@@ -3,7 +3,7 @@
 use crate::content::Content;
 use crate::presence::Presence;
 use crate::riot::NetStats;
-use crate::stats::Record;
+use crate::stats::{MatchSummary, Record};
 use crate::tracker::{ActStats, Profile, RecentMatch};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -17,6 +17,7 @@ pub enum Phase {
     Menus,
     Pregame,
     Ingame,
+    Postgame,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +154,16 @@ pub struct PlayerData {
     pub history: Vec<ActStats>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Postgame {
+    pub match_id: String,
+    pub summary: Option<Arc<MatchSummary>>,
+    /// The match's lobby, kept for incognito flags and parties.
+    pub lobby: Option<Lobby>,
+    /// When the banner first appeared, for the reveal animation.
+    pub shown_at: Option<Instant>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Model {
     pub phase: Phase,
@@ -165,6 +176,7 @@ pub struct Model {
     pub viewing: Option<String>,
     /// Latest presence per player.
     pub presences: HashMap<String, Presence>,
+    pub postgame: Option<Postgame>,
     /// The latest request failure and when it happened; shown briefly in the footer.
     pub last_error: Option<(String, Instant)>,
     pub net: Option<Arc<NetStats>>,
@@ -181,6 +193,7 @@ impl Model {
             players: HashMap::new(),
             viewing: None,
             presences: HashMap::new(),
+            postgame: None,
             last_error: None,
             net: None,
         }
@@ -196,12 +209,20 @@ impl Model {
         self.presences.get(&self.me)
     }
 
+    /// Riot never had the match's results: back to the menus rather than waiting for them forever.
+    pub fn give_up_postgame(&mut self, match_id: &str) {
+        if self.phase == Phase::Postgame && self.postgame.as_ref().is_some_and(|p| p.match_id == match_id) {
+            self.postgame = None;
+            self.phase = Phase::Menus;
+        }
+    }
+
     /// Party id per player, for parties of two or more. Before the match starts only your own party counts.
     /// Once it is running every party in the presences does, which Riot sends only for you and your
-    /// friends.
+    /// friends. Post-game takes every party from the match details.
     pub fn parties(&self) -> HashMap<String, String> {
         // Incognito players other than you are never tied to a party.
-        let lobby = self.lobby.as_ref();
+        let lobby = if self.phase == Phase::Postgame { self.postgame.as_ref().and_then(|p| p.lobby.as_ref()) } else { self.lobby.as_ref() };
         let incognito = |p: &str| p != self.me && lobby.is_some_and(|l| l.slots.iter().any(|s| s.puuid == p && s.incognito));
         let mut parties = self.all_parties();
         parties.retain(|p, _| !incognito(p));
@@ -214,6 +235,11 @@ impl Model {
     }
 
     fn all_parties(&self) -> HashMap<String, String> {
+        if self.phase == Phase::Postgame
+            && let Some(summary) = self.postgame.as_ref().and_then(|p| p.summary.as_ref())
+        {
+            return summary.parties();
+        }
         let mine = self.my_presence().and_then(|p| p.party_id.clone());
         let mut by_party: HashMap<String, Vec<String>> = HashMap::new();
         for p in self.presences.values() {
@@ -316,7 +342,7 @@ mod tests {
         assert_eq!(all.len(), 4, "solo players are not a party");
         assert_eq!(all["a"], "y");
 
-        for phase in [Phase::Pregame, Phase::Menus] {
+        for phase in [Phase::Pregame, Phase::Menus, Phase::Postgame] {
             m.phase = phase.clone();
             let own = m.parties();
             assert_eq!(own.len(), 2, "{phase:?}");

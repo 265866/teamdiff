@@ -3,7 +3,7 @@
 use crate::content::Content;
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::riot::NetStats;
-use crate::stats::{Record, RecordSource, pooled_kd_hs};
+use crate::stats::{MatchSummary, Record, RecordSource, pooled_kd_hs};
 use chrono::Utc;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -17,6 +17,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Every screen is this many columns wide; narrower terminals get the too-small screen.
 pub const WIDTH: u16 = 112;
+const INNER: usize = WIDTH as usize - 4;
 
 // ---------- palette ----------
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
@@ -175,6 +176,11 @@ fn join(cols: &[Col], cells: Vec<Vec<Seg>>) -> Row {
 
 fn header(cols: &[Col]) -> Row {
     join(cols, cols.iter().map(|c| vec![s(c.title.clone(), dim())]).collect())
+}
+
+fn center(segs: Vec<Seg>) -> Row {
+    let pad = INNER.saturating_sub(width(&segs)) / 2;
+    std::iter::once(s(" ".repeat(pad), Style::new())).chain(segs).collect::<Vec<_>>().into()
 }
 
 fn keys(pairs: &[(&str, &str)]) -> Vec<Seg> {
@@ -395,6 +401,12 @@ pub fn selectable(m: &Model) -> Vec<String> {
         Phase::Pregame | Phase::Ingame => {
             m.lobby.as_ref().filter(|l| l.is_competitive()).map(|l| l.slots.iter().map(|s| s.puuid.clone()).collect()).unwrap_or_default()
         }
+        Phase::Postgame => m
+            .postgame
+            .as_ref()
+            .and_then(|p| p.summary.as_ref())
+            .map(|s| postgame_order(m, s).into_iter().map(|p| p.0).collect())
+            .unwrap_or_default(),
         Phase::Waiting(_) => Vec::new(),
     }
 }
@@ -550,6 +562,197 @@ fn menus_screen(m: &Model) -> Screen {
     }
 }
 
+// ---------- post-game ----------
+const FONT: &[(char, [&str; 5])] = &[
+    ('V', ["█   █", "█   █", "█   █", " █ █ ", "  █  "]),
+    ('I', ["█████", "  █  ", "  █  ", "  █  ", "█████"]),
+    ('C', [" ████", "█    ", "█    ", "█    ", " ████"]),
+    ('T', ["█████", "  █  ", "  █  ", "  █  ", "  █  "]),
+    ('O', [" ███ ", "█   █", "█   █", "█   █", " ███ "]),
+    ('R', ["████ ", "█   █", "████ ", "█  █ ", "█   █"]),
+    ('Y', ["█   █", " █ █ ", "  █  ", "  █  ", "  █  "]),
+    ('D', ["████ ", "█   █", "█   █", "█   █", "████ "]),
+    ('E', ["█████", "█    ", "████ ", "█    ", "█████"]),
+    ('F', ["█████", "█    ", "████ ", "█    ", "█    "]),
+    ('A', [" ███ ", "█   █", "█████", "█   █", "█   █"]),
+    ('W', ["█   █", "█   █", "█ █ █", "██ ██", "█   █"]),
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Win,
+    Loss,
+    Draw,
+}
+
+/// Riot's flags decide, not the score: a surrender can end a match at a tied score, and a remake has
+/// no winner.
+fn outcome(summary: &MatchSummary, team: &str) -> Outcome {
+    match summary.teams.iter().find(|(_, (_, won))| *won) {
+        Some((t, _)) if t == team => Outcome::Win,
+        Some(_) => Outcome::Loss,
+        None => Outcome::Draw,
+    }
+}
+
+/// The block-letter banner. Columns reveal left to right (14 ms each), then a highlight sweeps
+/// across every 2.8 s on a win, or the color slowly sags on a loss.
+fn banner(word: &str, outcome: Outcome, elapsed_ms: u128) -> Vec<Row> {
+    let glyph = |c: char| FONT.iter().find(|(k, _)| *k == c).map(|(_, g)| *g).unwrap_or(["     "; 5]);
+    let rows: Vec<String> = (0..5)
+        .map(|r| word.chars().map(|c| glyph(c)[r].chars().flat_map(|ch| [ch, ch]).collect::<String>()).collect::<Vec<_>>().join("  "))
+        .collect();
+    let pad = INNER.saturating_sub(rows[0].chars().count()) / 2;
+    let base = match outcome {
+        Outcome::Win => (0x4a, 0xde, 0x80),
+        Outcome::Loss => (0xf8, 0x71, 0x71),
+        Outcome::Draw => (0xc9, 0xd1, 0xd9),
+    };
+    rows.iter()
+        .map(|line| {
+            let mut segs = vec![s(" ".repeat(pad), Style::new())];
+            for (col, ch) in line.chars().enumerate() {
+                let reveal = col as u128 * 14;
+                if ch == ' ' || elapsed_ms < reveal {
+                    segs.push(s(" ", Style::new()));
+                    continue;
+                }
+                let t = elapsed_ms - reveal;
+                let (r, g, b) = match outcome {
+                    Outcome::Win if t >= 900 && (t - 900) % 2800 < 196 => (0xf2, 0xff, 0xf6),
+                    Outcome::Loss => {
+                        let phase = ((t % 3200) as f64 / 3200.0 * std::f64::consts::TAU).cos() * 0.5 + 0.5;
+                        let mix = |a: u8, z: u8| (a as f64 * phase + z as f64 * (1.0 - phase)) as u8;
+                        (mix(base.0, 0x8f), mix(base.1, 0x3b), mix(base.2, 0x3b))
+                    }
+                    _ => base,
+                };
+                segs.push(s(ch.to_string(), fg(rgb(r, g, b))));
+            }
+            segs.into()
+        })
+        .collect()
+}
+
+fn pg_cols() -> Vec<Col> {
+    vec![
+        col("", 1, false),
+        col("", 1, false),
+        col("AGENT", 9, false),
+        col("PLAYER", 18, false),
+        col("PERF", 4, true),
+        col("ACS", 4, true),
+        col("K", 3, true),
+        col("D", 3, true),
+        col("A", 3, true),
+        col("+/-", 4, true),
+        col("ADR", 4, true),
+        col("HS%", 4, true),
+        col("FB", 3, true),
+    ]
+}
+
+/// (puuid, team) for post-game rows: my team first, each team sorted by Performance Score.
+fn postgame_order(m: &Model, summary: &MatchSummary) -> Vec<(String, String)> {
+    let my_team = summary.player(&m.me).map(|p| p.team.clone()).unwrap_or_default();
+    let mut players: Vec<_> = summary.players.iter().collect();
+    players.sort_by(|a, b| (a.team != my_team).cmp(&(b.team != my_team)).then(summary.rating(b).total_cmp(&summary.rating(a))));
+    players.into_iter().map(|p| (p.puuid.clone(), p.team.clone())).collect()
+}
+
+fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
+    let footer = keys(&[("↑↓", "select"), ("enter", "details"), ("q", "quit")]);
+    let Some(pg) = m.postgame.as_ref() else { return menus_screen(m) };
+    let Some(summary) = pg.summary.as_ref() else {
+        return Screen {
+            title: vec![s("MATCH RESULT", bold())],
+            right: Vec::new(),
+            rows: vec![blank(), center(vec![s("Waiting for match results…", dim())]), blank()],
+            footer,
+        };
+    };
+    let content = &m.content;
+    let me = summary.player(&m.me);
+    let my_team = me.map(|p| p.team.clone()).unwrap_or_default();
+    let (us, them, _) = summary.score_for(&my_team).unwrap_or((0, 0, false));
+    let outcome = outcome(summary, &my_team);
+    let word = match outcome {
+        Outcome::Win => "VICTORY",
+        Outcome::Loss => "DEFEAT",
+        Outcome::Draw => "DRAW",
+    };
+    let elapsed = pg.shown_at.map(|t| t.elapsed().as_millis()).unwrap_or(u128::MAX / 2);
+    let mins = summary.length_ms / 60_000;
+    let right = vec![s(
+        format!("{} · {} · {}:{:02}", queue_name(&summary.queue), content.map(&summary.map_url), mins, (summary.length_ms / 1000) % 60),
+        dim(),
+    )];
+
+    let mut rows = vec![blank()];
+    rows.extend(banner(word, outcome, elapsed));
+    rows.push(blank());
+    rows.push(center(vec![
+        s(us.to_string(), ally().add_modifier(Modifier::BOLD)),
+        s("  –  ", dim()),
+        s(them.to_string(), enemy().add_modifier(Modifier::BOLD)),
+    ]));
+    rows.push(blank());
+
+    let cols = pg_cols();
+    let lobby = pg.lobby.as_ref();
+    let incognito = |p: &str| lobby.and_then(|l| l.slots.iter().find(|s| s.puuid == p)).is_some_and(|s| s.incognito);
+    let party = party_marks(&m.parties());
+    let order = postgame_order(m, summary);
+    let cursor_id = order.get(ui.cursor).map(|p| p.0.clone());
+    let mut current_team = None;
+    for (puuid, team) in &order {
+        if current_team.as_ref() != Some(team) {
+            if current_team.is_some() {
+                rows.push(blank());
+            }
+            let (label, style) = if *team == my_team { ("YOUR TEAM", ally()) } else { ("ENEMY TEAM", enemy()) };
+            rows.push(vec![s(label, style.add_modifier(Modifier::BOLD))].into());
+            if *team == my_team {
+                rows.push(header(&cols));
+            }
+            current_team = Some(team.clone());
+        }
+        let Some(p) = summary.player(puuid) else { continue };
+        let diff = p.kills as i64 - p.deaths as i64;
+        let perf = p.performance.map(|v| v.round().to_string()).unwrap_or_else(|| "—".into());
+        let cells = vec![
+            vec![s(if cursor_id.as_deref() == Some(puuid.as_str()) { "▸" } else { " " }, ally())],
+            party.get(puuid).map(|mark| vec![mark.clone()]).unwrap_or_else(|| vec![s(" ", Style::new())]),
+            vec![s(content.agent(&p.agent_id), bold())],
+            name_segs(m, puuid, incognito(puuid), Some(&p.agent_id)),
+            vec![s(perf, bold())],
+            vec![s(p.acs().to_string(), text())],
+            vec![s(p.kills.to_string(), text())],
+            vec![s(p.deaths.to_string(), text())],
+            vec![s(p.assists.to_string(), text())],
+            vec![s(
+                format!("{diff:+}").replace("+0", "0"),
+                if diff > 0 {
+                    good()
+                } else if diff < 0 {
+                    bad()
+                } else {
+                    dim()
+                },
+            )],
+            vec![s(p.adr().to_string(), text())],
+            vec![s(p.hs_pct().map(|h| format!("{h}%")).unwrap_or_else(|| "—".into()), text())],
+            vec![s(p.first_kills.to_string(), text())],
+        ];
+        let mut row = join(&cols, cells);
+        if cursor_id.as_deref() == Some(puuid.as_str()) {
+            row.bg = Some(CURSOR_BG);
+        }
+        rows.push(row);
+    }
+    Screen { title: vec![s("MATCH RESULT", bold())], right, rows, footer }
+}
+
 // ---------- detail / profile ----------
 const HALF: usize = 50;
 
@@ -676,7 +879,7 @@ fn recent_rows(m: &Model, d: &PlayerData) -> Vec<Row> {
 
 fn detail_screen(m: &Model, puuid: &str) -> Screen {
     let content = &m.content;
-    let lobby = m.lobby.as_ref();
+    let lobby = m.lobby.as_ref().or(m.postgame.as_ref().and_then(|p| p.lobby.as_ref()));
     let slot = lobby.and_then(|l| l.slots.iter().find(|s| s.puuid == puuid));
     let incognito = slot.is_some_and(|s| s.incognito) && puuid != m.me;
     // Incognito players are never looked up.
@@ -757,6 +960,7 @@ fn screen(m: &Model, ui: &UiState) -> Screen {
         (_, Phase::Menus) => menus_screen(m),
         (_, Phase::Pregame) => lobby_screen(m, ui, true),
         (_, Phase::Ingame) => lobby_screen(m, ui, false),
+        (_, Phase::Postgame) => postgame_screen(m, ui),
     }
 }
 
@@ -814,6 +1018,11 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
     f.render_widget(Paragraph::new(lines).style(text()).block(block), rect);
 }
 
+/// True when the screen animates and needs frequent redraws.
+pub fn animating(m: &Model) -> bool {
+    m.phase == Phase::Postgame
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -841,6 +1050,15 @@ pub mod tests {
     fn map_header_falls_back_for_long_names() {
         assert_eq!(lobby_cols("Ascent")[8].title, "WIN% ON ASCENT");
         assert_eq!(lobby_cols("Corrode")[8].title, "CORRODE WIN%");
+    }
+
+    #[test]
+    fn banner_reveals_left_to_right() {
+        let at = |ms| banner("VICTORY", Outcome::Win, ms).iter().map(|r| width(&r.segs)).max().unwrap();
+        assert_eq!(at(0), at(10_000), "rows keep their width while revealing");
+        let visible = |ms| banner("VICTORY", Outcome::Win, ms).iter().flat_map(|r| r.segs.clone()).filter(|x| x.content == "█").count();
+        assert!(visible(0) < visible(300));
+        assert!(visible(300) < visible(5_000));
     }
 
     #[test]
@@ -872,5 +1090,22 @@ pub mod tests {
         let lines = render(&m, &UiState::default(), 80, 20);
         assert!(lines.iter().any(|l| l.contains("Terminal too small")));
         assert!(lines.iter().any(|l| l.contains("Widen to 112 columns (now 80)")));
+    }
+
+    #[test]
+    fn riots_flags_decide_the_outcome() {
+        let m = crate::demo::model("defeat");
+        let mut s = (**m.postgame.as_ref().unwrap().summary.as_ref().unwrap()).clone();
+        let mine = s.player(&m.me).unwrap().team.clone();
+        for (rounds, _) in s.teams.values_mut() {
+            *rounds = 6;
+        }
+        assert!(outcome(&s, &mine) == Outcome::Loss, "a surrender at a tied score");
+        for (_, won) in s.teams.values_mut() {
+            *won = false;
+        }
+        assert!(outcome(&s, &mine) == Outcome::Draw, "no winner");
+        s.teams.get_mut(&mine).unwrap().1 = true;
+        assert!(outcome(&s, &mine) == Outcome::Win);
     }
 }

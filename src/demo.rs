@@ -1,18 +1,19 @@
 //! `--demo`: a sample lobby for trying the UI without a live match. Tab cycles screens.
 
 use crate::content::Content;
-use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
+use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Postgame, Side, Slot};
 use crate::presence::{LoopState, Presence};
-use crate::stats::{PlayerMatch, Record};
+use crate::stats::{MatchSummary, PlayerMatch, Record};
 use crate::tracker::{ActStats, Profile, RecentMatch};
 use chrono::{Duration as Days, Utc};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const ASCENT: &str = "/Game/Maps/Ascent/Ascent";
 
-pub const SCREENS: [&str; 5] = ["waiting", "menus", "agent-select", "loading", "in-game"];
+pub const SCREENS: [&str; 7] = ["waiting", "menus", "agent-select", "loading", "in-game", "victory", "defeat"];
 
 fn content() -> Content {
     let agents: Vec<Value> = ["Jett", "Sova", "Killjoy", "Omen", "Sage", "Raze", "Breach", "Clove", "Cypher", "Neon"]
@@ -84,6 +85,18 @@ fn roster() -> Vec<P> {
     ]
 }
 
+fn summary(id: &str, map: &str, players: Vec<PlayerMatch>, score: (u32, u32), start_ms: i64) -> MatchSummary {
+    MatchSummary {
+        match_id: id.into(),
+        map_url: format!("/Game/Maps/{map}/{map}"),
+        queue: "competitive".into(),
+        start_ms,
+        length_ms: 34 * 60_000 + 12_000,
+        teams: HashMap::from([("Blue".into(), (score.0, score.0 > score.1)), ("Red".into(), (score.1, score.1 > score.0))]),
+        players,
+    }
+}
+
 fn player_data(p: &P) -> PlayerData {
     // Like tracker.gg: the latest act played, and unranked until a game this act.
     let acts = vec![ActStats { act_id: p.act.2.into(), tier: p.tier, record: Record { wins: p.act.0, losses: p.act.1 } }];
@@ -129,6 +142,54 @@ fn player_data(p: &P) -> PlayerData {
         recent: Load::Ready(recent),
         history,
     }
+}
+
+/// (player, team, performance, score, kills, deaths, assists, damage, headshot %, first bloods)
+type StatRow = (&'static str, &'static str, f64, u32, u32, u32, u32, u32, u32, u32);
+
+fn postgame(win: bool, lobby: Lobby) -> Postgame {
+    let stats: [StatRow; 10] = [
+        ("omen", "Blue", 431.0, 5764, 20, 11, 8, 3630, 30, 3),
+        ("me", "Blue", 338.0, 6314, 24, 15, 6, 3916, 27, 5),
+        ("sova", "Blue", 281.0, 4422, 15, 14, 11, 3102, 19, 2),
+        ("killjoy", "Blue", 247.0, 4136, 14, 13, 5, 2838, 22, 1),
+        ("sage", "Blue", 213.0, 2640, 8, 16, 12, 1870, 14, 0),
+        ("raze", "Red", 331.0, 5830, 22, 17, 4, 3696, 26, 4),
+        ("breach", "Red", 268.0, 3476, 11, 17, 13, 2420, 18, 1),
+        ("clove", "Red", 254.0, 4180, 15, 16, 7, 2860, 22, 2),
+        ("neon", "Red", 229.0, 3784, 14, 18, 3, 2662, 23, 2),
+        ("cypher", "Red", 188.0, 3080, 10, 16, 6, 2112, 20, 0),
+    ];
+    let parties = HashMap::from([("me", "x"), ("sova", "x"), ("raze", "y"), ("breach", "y"), ("clove", "z"), ("cypher", "z")]);
+    let agent = |id: &str| roster().into_iter().find(|p| p.id == id).map(|p| p.agent).unwrap_or("jett");
+    let players = stats
+        .iter()
+        .map(|&(id, team, perf, score, k, d, a, dmg, hs, fb)| PlayerMatch {
+            puuid: id.into(),
+            team: team.into(),
+            agent_id: agent(id).into(),
+            party_id: parties.get(id).map(|p| p.to_string()).unwrap_or_default(),
+            kills: k,
+            deaths: d,
+            assists: a,
+            score,
+            rounds: 22,
+            damage: dmg,
+            headshots: hs,
+            bodyshots: 100 - hs,
+            first_kills: fb,
+            performance: Some(perf),
+            ..Default::default()
+        })
+        .collect();
+    let mut s = summary("demo-match", "Ascent", players, if win { (13, 9) } else { (9, 13) }, 1_000_000);
+    if !win {
+        for p in &mut s.players {
+            p.team = if p.team == "Blue" { "Red".into() } else { "Blue".into() };
+        }
+        s.teams = HashMap::from([("Red".into(), (9, false)), ("Blue".into(), (13, true))]);
+    }
+    Postgame { match_id: "demo-match".into(), summary: Some(Arc::new(s)), lobby: Some(lobby), shown_at: Some(Instant::now()) }
 }
 
 /// The demo model for one of [`SCREENS`].
@@ -189,10 +250,13 @@ pub fn model(screen: &str) -> Model {
         "waiting" => Phase::Waiting("Riot Client is not running".into()),
         "menus" => Phase::Menus,
         "agent-select" => Phase::Pregame,
-        _ => Phase::Ingame,
+        "loading" | "in-game" => Phase::Ingame,
+        _ => Phase::Postgame,
     };
-    if !matches!(screen, "menus" | "waiting") {
-        m.lobby = Some(lobby);
+    match screen {
+        "victory" | "defeat" => m.postgame = Some(postgame(screen == "victory", lobby)),
+        "menus" | "waiting" => {}
+        _ => m.lobby = Some(lobby),
     }
     m
 }
@@ -225,6 +289,17 @@ mod tests {
         let parties = m.parties();
         assert!(parties.contains_key("sova"), "{parties:?}");
         assert!(!parties.contains_key("omen"), "an incognito friend in your party isn't marked: {parties:?}");
+    }
+
+    #[test]
+    fn a_postgame_whose_results_never_come_goes_back_to_the_menus() {
+        let mut m = model("victory");
+        m.give_up_postgame("another match");
+        assert_eq!(m.phase, Phase::Postgame, "only the match it waited for");
+        let id = m.postgame.as_ref().unwrap().match_id.clone();
+        m.give_up_postgame(&id);
+        assert_eq!(m.phase, Phase::Menus);
+        assert!(m.postgame.is_none());
     }
 
     #[test]
@@ -291,6 +366,31 @@ mod tests {
         let s = screen("loading");
         let neon = s.iter().find(|l| l.contains("Hotel")).unwrap();
         assert!(neon.contains("···"));
+    }
+
+    #[test]
+    fn postgame_orders_by_performance() {
+        let s = screen("victory");
+        let omen = s.iter().position(|l| l.contains("Omen") && l.contains("431")).unwrap();
+        let me = s.iter().position(|l| l.contains("Alpha")).unwrap();
+        assert!(omen < me, "sorted by Performance Score");
+    }
+
+    #[test]
+    fn defeat_banner_and_score() {
+        let s = screen("defeat").join("\n");
+        assert!(s.contains("9  –  13"));
+    }
+
+    #[test]
+    fn postgame_details_list_the_same_parties_as_the_scoreboard() {
+        let mut m = model("victory");
+        m.players.get_mut("cypher").unwrap().name = Some(("leaked".into(), "1".into()));
+        let detail = |id: &str| render(&m, &UiState { view: View::Detail(id.into()), ..Default::default() }, WIDTH, 50).join("\n");
+        assert!(detail("raze").contains("partied with Foxtrot#DEMO"), "{}", detail("raze"));
+        let clove = detail("clove");
+        assert!(!clove.contains("partied with") && !clove.contains("leaked"), "an incognito mate is never shown: {clove}");
+        assert!(!detail("killjoy").contains("partied with"));
     }
 
     #[test]
