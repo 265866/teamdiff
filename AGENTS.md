@@ -20,7 +20,8 @@ scripts/privacy-check.sh
 ```
 
 teamdiff builds and runs only on Windows. Some tests start a hidden WebView2 browser, which needs the
-Microsoft Edge WebView2 Runtime.
+Microsoft Edge WebView2 Runtime. `cargo run -- --demo` shows every screen with made-up players and
+needs no game, so use it to check UI changes.
 
 ## What teamdiff never shows
 
