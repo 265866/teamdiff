@@ -1,8 +1,10 @@
 //! Network side: follows the game's state through presence and loads player data in the background.
 
-use crate::model::{Lobby, Model, Phase, parse_coregame, parse_pregame};
+use crate::local_files::browser_profile_dir;
+use crate::model::{Load, Lobby, Model, Phase, PlayerData, parse_coregame, parse_pregame};
 use crate::presence::LoopState;
 use crate::riot::{Riot, connect};
+use crate::tracker::{self, Tracker, riot_id_path};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -58,8 +60,13 @@ pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
         }
     }
     loop {
-        let riot = match connect(dump_dir.clone()).await {
-            Ok(r) => Arc::new(r),
+        let connected = connect(dump_dir.clone()).await.and_then(|r| {
+            let profile = browser_profile_dir().ok_or_else(|| anyhow::anyhow!("LOCALAPPDATA is not set"))?;
+            let tracker = Tracker::new(r.net.clone(), dump_dir.clone(), profile);
+            Ok((Arc::new(r), Arc::new(tracker)))
+        });
+        let (riot, tracker) = match connected {
+            Ok(c) => c,
             Err(e) => {
                 lock(&shared).phase = Phase::Waiting(format!("{e:#}"));
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -73,7 +80,7 @@ pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
             m.last_error = None;
             m.net = Some(riot.net.clone());
         }
-        let mut session = Session::new(riot, shared.clone());
+        let mut session = Session::new(riot, tracker, shared.clone());
         loop {
             match session.tick().await {
                 Ok(()) => {}
@@ -90,16 +97,30 @@ pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
 
 struct Session {
     riot: Arc<Riot>,
+    tracker: Arc<Tracker>,
     shared: Shared,
     pregame_id: Option<String>,
     core_id: Option<String>,
+    /// The last agent-select match seen; a new one reloads everyone.
+    loaded_match: Option<String>,
+    requested: Claims,
     named: Claims,
     client_gone: bool,
 }
 
 impl Session {
-    fn new(riot: Arc<Riot>, shared: Shared) -> Self {
-        Self { riot, shared, pregame_id: None, core_id: None, named: Claims::default(), client_gone: false }
+    fn new(riot: Arc<Riot>, tracker: Arc<Tracker>, shared: Shared) -> Self {
+        Self {
+            riot,
+            tracker,
+            shared,
+            pregame_id: None,
+            core_id: None,
+            loaded_match: None,
+            requested: Claims::default(),
+            named: Claims::default(),
+            client_gone: false,
+        }
     }
 
     async fn tick(&mut self) -> Result<()> {
@@ -140,7 +161,11 @@ impl Session {
             m.presences.values().filter(|p| p.party_id.is_some() && p.party_id == my_party).map(|p| p.puuid.clone()).collect()
         };
         let me = self.riot.puuid.clone();
-        self.load_names(std::iter::once(me).chain(party).collect());
+        self.load_names(std::iter::once(me.clone()).chain(party.iter().cloned()).collect());
+        self.load_player(me);
+        for p in party {
+            self.load_player(p);
+        }
     }
 
     async fn pregame(&mut self) -> Result<()> {
@@ -149,6 +174,11 @@ impl Session {
             self.pregame_id = self.riot.pregame_match_id().await?;
         }
         let Some(id) = self.pregame_id.clone() else { return Ok(()) };
+        // Stats are loaded fresh at the start of every match, never carried over from an earlier one.
+        if self.loaded_match.as_deref() != Some(id.as_str()) {
+            self.requested.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            self.loaded_match = Some(id.clone());
+        }
         let Some(v) = self.riot.pregame_match(&id).await? else {
             self.pregame_id = None;
             return Ok(());
@@ -189,8 +219,11 @@ impl Session {
             m.lobby = Some(lobby);
         }
         if competitive {
-            // Incognito players' names are never requested.
-            self.load_names(named);
+            // Incognito players' names are never requested, so tracker.gg is never asked about them.
+            self.load_names(named.clone());
+            for p in named {
+                self.load_player(p);
+            }
         }
     }
 
@@ -214,5 +247,123 @@ impl Session {
                 }
             }
         });
+    }
+
+    /// The player's Riot ID as tracker.gg's URLs spell it, once the name lookup has returned it.
+    fn riot_id(&self, puuid: &str) -> Option<String> {
+        lock(&self.shared).players.get(puuid).and_then(|d| d.name.as_ref()).map(|(n, t)| riot_id_path(n, t))
+    }
+
+    /// Loads a player's stats from tracker.gg. Waits for their name; a later tick calls this again.
+    fn load_player(&mut self, puuid: String) {
+        let Some(riot_id) = self.riot_id(&puuid) else { return };
+        let Some(act) = lock(&self.shared).content.current_act(chrono::Utc::now()).map(|a| a.id.clone()) else { return };
+        if !claim(&self.requested, &puuid) {
+            return;
+        }
+        let (tracker, shared, claims) = (self.tracker.clone(), self.shared.clone(), self.requested.clone());
+        tokio::spawn(async move {
+            if let Err(e) = load_player(&tracker, &shared, &puuid, &riot_id, &act).await {
+                report(&shared, &e);
+                release_after(claims, vec![puuid], RETRY_AFTER).await;
+            }
+        });
+    }
+}
+
+fn update(shared: &Shared, puuid: &str, f: impl FnOnce(&mut PlayerData)) {
+    f(lock(shared).players.entry(puuid.to_string()).or_default());
+}
+
+/// Rank and peak rank for one player from tracker.gg. A player tracker.gg doesn't know, or whose
+/// profile is private, is shown as such and not asked about again; any other failure is returned so
+/// the load is retried.
+async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &str, act: &str) -> Result<()> {
+    fn state<T>(private: bool) -> Load<T> {
+        if private { Load::Private } else { Load::Missing }
+    }
+    let unavailable = |private: bool| update(shared, puuid, |d| d.profile = state(private));
+    let v = match tracker.profile(riot_id).await {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            unavailable(false);
+            return Ok(());
+        }
+        Err(e) if e.is::<tracker::Private>() => {
+            unavailable(true);
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    // A profile shared only partly (tracker.gg's "premier" privacy) loads, but without stats, and its
+    // other pages are refused.
+    let shared_stats = v["data"]["segments"].as_array().is_some_and(|s| s.iter().any(|s| s["type"] == "season"));
+    if !shared_stats && v["data"]["metadata"]["privacy"].as_str().is_some_and(|p| !p.eq_ignore_ascii_case("public")) {
+        unavailable(true);
+        return Ok(());
+    }
+    let profile = tracker::parse_profile(&v, act);
+    update(shared, puuid, |d| d.profile = Load::Ready(profile));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rate_limit_isnt_reported_as_an_error() {
+        let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        report(&shared, &anyhow::Error::new(crate::riot::RateLimited).context("/x"));
+        assert!(lock(&shared).last_error.is_none(), "the footer counts it down instead");
+        report(&shared, &anyhow::anyhow!("500 from /x"));
+        assert!(lock(&shared).last_error.is_some());
+    }
+
+    fn profile_body(privacy: &str) -> String {
+        let season = r#"{"type":"season","attributes":{"seasonId":"a6"},"stats":{"rank":{"value":null,"metadata":{"iconUrl":"https://x/tiersv2/14.png"}}}}"#;
+        // As seen live, a "premier" profile carries no stats.
+        let segments = if privacy == "public" { season } else { "" };
+        format!(r#"{{"data":{{"metadata":{{"privacy":"{privacy}"}},"segments":[{segments}]}}}}"#)
+    }
+
+    /// Seen live: a "premier" profile loads without stats, and its other pages answer 451.
+    #[tokio::test]
+    async fn a_partly_private_profile_shows_as_private_without_an_error() {
+        let answer = crate::tracker::tests::answer;
+        let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        let tracker = Tracker::canned(vec![answer(200, &profile_body("premier"))]);
+        load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
+        let m = lock(&shared);
+        let d = &m.players["p"];
+        // The canned tracker panics on a second request, so nothing else was asked for.
+        assert_eq!(d.profile, Load::Private);
+    }
+
+    #[tokio::test]
+    async fn a_profile_with_stats_loads_whatever_its_privacy_label() {
+        let answer = crate::tracker::tests::answer;
+        let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        let body = profile_body("public").replace(r#""privacy":"public""#, r#""privacy":"premier""#);
+        let tracker = Tracker::canned(vec![answer(200, &body)]);
+        load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
+        assert!(matches!(&lock(&shared).players["p"].profile, Load::Ready(p) if p.tier == 14));
+    }
+
+    /// tracker.gg's `platformUserId` is its own id, never the Riot puuid the lobby uses.
+    #[tokio::test]
+    async fn a_profile_loads_though_tracker_gg_ids_the_player_differently() {
+        let act = "a6";
+        let body = format!(
+            r#"{{"data":{{"platformInfo":{{"platformUserId":"tracker-gg-own-id"}},"segments":[{{"type":"season","attributes":{{"seasonId":"{act}"}},"stats":{{"rank":{{"value":40,"metadata":{{"iconUrl":"https://x/tiersv2/14.png"}}}}}}}}]}}}}"#
+        );
+        let answer = crate::tracker::tests::answer;
+        let tracker = Tracker::canned(vec![answer(200, &body)]);
+        let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        let riot_puuid = "riot-puuid";
+        load_player(&tracker, &shared, riot_puuid, "a%23b", act).await.unwrap();
+        let m = lock(&shared);
+        let Load::Ready(profile) = &m.players[riot_puuid].profile else { panic!("the profile is shown") };
+        assert_eq!((profile.tier, profile.rr), (14, Some(40)));
     }
 }

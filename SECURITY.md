@@ -20,4 +20,5 @@ teamdiff holds your Riot Client's session while it runs. Report anything that co
 - send your data anywhere other than the Riot Client, Riot's game servers, tracker.gg and
   valorant-api.com;
 - name or look up a player the game hides as incognito;
-- make teamdiff change game state, such as selecting an agent.
+- make teamdiff change game state, such as selecting an agent;
+- run code or script that a server sends, outside the hidden browser's tracker.gg page.

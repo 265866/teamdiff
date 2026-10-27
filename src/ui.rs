@@ -1,6 +1,7 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
-use crate::model::{Model, Phase, Pick, Side, Slot};
+use crate::content::Content;
+use crate::model::{Load, Model, Phase, Pick, Side, Slot};
 use crate::riot::NetStats;
 use chrono::Utc;
 use ratatui::Frame;
@@ -54,6 +55,28 @@ fn warn() -> Style {
     fg(rgb(0xfb, 0xbf, 0x24))
 }
 const PARTY: [Color; 4] = [rgb(0x60, 0xa5, 0xfa), rgb(0xe8, 0x79, 0xf9), rgb(0xfb, 0x92, 0x3c), rgb(0xa3, 0xe6, 0x35)];
+
+fn rank_style(name: &str) -> Style {
+    let c = match name.split_whitespace().next().unwrap_or("") {
+        "Iron" => rgb(0x8b, 0x8b, 0x8b),
+        "Bronze" => rgb(0xb0, 0x8d, 0x57),
+        "Silver" => rgb(0xc0, 0xc7, 0xcf),
+        "Gold" => rgb(0xe5, 0xb9, 0x4e),
+        "Platinum" => rgb(0x3f, 0xb8, 0xc4),
+        "Diamond" => rgb(0xc0, 0x84, 0xfc),
+        "Ascendant" => rgb(0x34, 0xd3, 0x99),
+        "Immortal" => rgb(0xf0, 0x5a, 0x6a),
+        "Radiant" => rgb(0xff, 0xf3, 0xb0),
+        _ => rgb(0x6b, 0x76, 0x84),
+    };
+    fg(c)
+}
+
+fn tier_seg(content: &Content, tier: u32) -> Seg {
+    let name = content.tier_name(tier);
+    let style = rank_style(&name);
+    s(name, style)
+}
 
 // ---------- text grid ----------
 type Seg = Span<'static>;
@@ -204,9 +227,25 @@ fn name_segs(m: &Model, puuid: &str, incognito: bool, agent: Option<&str>) -> Ve
     }
 }
 
+fn rank_segs(content: &Content, tier: u32, rr: Option<u32>) -> Vec<Seg> {
+    if tier == 0 {
+        return vec![s("Unranked", dim())];
+    }
+    let mut segs = vec![tier_seg(content, tier)];
+    segs.extend(rr.map(|rr| s(format!(" {rr}rr"), dim())));
+    segs
+}
+
 // ---------- lobby ----------
 fn lobby_cols() -> Vec<Col> {
-    vec![col("", 1, false), col("AGENT", 11, false), col("PLAYER", 18, false), col("LVL", 4, true)]
+    vec![
+        col("", 1, false),
+        col("AGENT", 11, false),
+        col("PLAYER", 18, false),
+        col("LVL", 4, true),
+        col("RANK", 16, false),
+        col("PEAK", 11, false),
+    ]
 }
 
 fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMap<String, Seg>) -> Row {
@@ -228,7 +267,22 @@ fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMa
         (false, Some(l)) => vec![s(l.to_string(), text())],
         _ => vec![s("—", dim())],
     };
-    join(cols, vec![party_cell, agent, name, lvl])
+    let data = m.players.get(&slot.puuid);
+    let loading = || vec![s(LOADING, dim())];
+    let dash = || vec![s("—", dim())];
+    // Incognito players are never looked up, so they have no stats.
+    let hidden = slot.incognito && slot.puuid != m.me;
+    let (rank, peak) = match data.map(|d| &d.profile) {
+        _ if hidden => (vec![s("incognito", dim())], dash()),
+        None | Some(Load::Loading) => (loading(), loading()),
+        Some(Load::Missing) => (vec![s("not found", dim())], dash()),
+        Some(Load::Private) => (vec![s("private", dim())], dash()),
+        Some(Load::Ready(p)) => {
+            let peak = if p.peak_tier == 0 { dash() } else { vec![tier_seg(content, p.peak_tier)] };
+            (rank_segs(content, p.tier, p.rr), peak)
+        }
+    };
+    join(cols, vec![party_cell, agent, name, lvl, rank, peak])
 }
 
 fn lobby_screen(m: &Model, pregame: bool) -> Screen {
@@ -298,7 +352,9 @@ fn parse_queue_time(t: &str) -> Option<chrono::DateTime<Utc>> {
 }
 
 fn menus_screen(m: &Model) -> Screen {
+    let content = &m.content;
     let now = Utc::now();
+    let me = m.players.get(&m.me);
     let mut rows = vec![blank()];
     let mut line = vec![s("   ", Style::new())];
     line.extend(name_segs(m, &m.me, false, None));
@@ -307,6 +363,27 @@ fn menus_screen(m: &Model) -> Screen {
     }
     rows.push(line.into());
     rows.push(blank());
+    match me.map(|d| &d.profile) {
+        Some(Load::Ready(profile)) => {
+            let mut r = vec![s("   Rank       ", dim())];
+            if profile.tier == 0 {
+                r.push(s("Unranked", dim()));
+            } else {
+                r.push(tier_seg(content, profile.tier));
+                r.extend(profile.rr.map(|rr| s(format!("  {rr} RR"), dim())));
+            }
+            if profile.peak_tier > 0 {
+                r.extend([s("      Peak  ", dim()), tier_seg(content, profile.peak_tier)]);
+            }
+            rows.push(r.into());
+        }
+        Some(Load::Missing) => rows.push(vec![s("   Rank       ", dim()), s("not found on tracker.gg", dim())].into()),
+        Some(Load::Private) => rows.push(
+            vec![s("   Rank       ", dim()), s("your tracker.gg profile is private; sign in at tracker.gg and make it public", dim())]
+                .into(),
+        ),
+        None | Some(Load::Loading) => rows.push(vec![s("   Rank       ", dim()), s(LOADING, dim())].into()),
+    }
     let party = party_marks(&m.parties());
     let mut mates: Vec<&String> = party.keys().filter(|p| **p != m.me).collect();
     // A HashMap's order changes from one frame to the next.
@@ -314,6 +391,15 @@ fn menus_screen(m: &Model) -> Screen {
     for (i, mate) in mates.iter().enumerate() {
         let mut r = vec![s(if i == 0 { "   Party      " } else { "              " }, dim()), party[*mate].clone(), s(" ", Style::new())];
         r.extend(name_segs(m, mate, false, None));
+        match m.players.get(*mate).map(|d| &d.profile) {
+            Some(Load::Ready(p)) => {
+                r.push(s("  ", Style::new()));
+                r.extend(rank_segs(content, p.tier, p.rr));
+            }
+            Some(Load::Missing) => r.push(s("  —", dim())),
+            Some(Load::Private) => r.push(s("  private", dim())),
+            None | Some(Load::Loading) => {}
+        }
         rows.push(r.into());
     }
     let p = m.my_presence();
@@ -427,6 +513,16 @@ pub mod tests {
         assert!(t.iter().map(|x| x.content.to_string()).collect::<String>().ends_with('…'));
         let wide = fit(vec![s("한국어이름", Style::new())], 6, false);
         assert_eq!(width(&wide), 6, "double-width characters are measured by cells");
+    }
+
+    #[test]
+    fn players_without_stats_say_why() {
+        let mut m = crate::demo::model("in-game");
+        m.players.get_mut("neon").unwrap().profile = Load::Missing;
+        let lines = render(&m, 120, 22);
+        let row = |agent: &str| lines.iter().find(|l| l.contains(agent)).cloned().unwrap_or_default();
+        assert!(row("Omen").contains("incognito"), "{}", row("Omen"));
+        assert!(row("Neon").contains("not found"), "{}", row("Neon"));
     }
 
     #[test]

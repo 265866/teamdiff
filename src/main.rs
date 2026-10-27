@@ -1,3 +1,4 @@
+mod browser;
 mod content;
 mod controller;
 mod demo;
@@ -5,6 +6,7 @@ mod local_files;
 mod model;
 mod presence;
 mod riot;
+mod tracker;
 mod ui;
 
 use anyhow::Result;
@@ -23,7 +25,7 @@ USAGE:
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
     --demo         Show sample data instead of connecting; Tab cycles screens
-                   (waiting, menus, agent-select, in-game)
+                   (waiting, menus, agent-select, loading, in-game)
     -h, --help     Show this help
 
 KEYS:
