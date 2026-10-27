@@ -60,3 +60,26 @@ jobs:
             printf '::error::Commit subjects must look like "feat(lobby): show ranks". These commits do not:\n%s\n' "$bad"
             exit 1
           fi
+
+  privacy:
+    name: privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Forks don't get the secret; their PRs are still checked against every pattern, and main is
+      # checked against the denylist again once they merge.
+      - name: Write the denylist
+        env:
+          DENYLIST: ${{ secrets.PRIVACY_DENYLIST }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ -z "$DENYLIST" ] && [ "$FORK" != true ]; then
+            echo '::error::The PRIVACY_DENYLIST secret is missing or empty.'
+            exit 1
+          fi
+          printf '%s\n' "$DENYLIST" > .privacy-denylist
+      - run: scripts/privacy-check.sh --history
