@@ -3,7 +3,7 @@
 use crate::content::Content;
 use crate::presence::Presence;
 use crate::riot::NetStats;
-use crate::stats::{MatchSummary, Record};
+use crate::stats::{CompUpdate, MatchSummary, Record};
 use crate::tracker::{ActStats, Profile, RecentMatch};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -158,6 +158,7 @@ pub struct PlayerData {
 pub struct Postgame {
     pub match_id: String,
     pub summary: Option<Arc<MatchSummary>>,
+    pub rr: Option<CompUpdate>,
     /// The match's lobby, kept for incognito flags and parties.
     pub lobby: Option<Lobby>,
     /// When the banner first appeared, for the reveal animation.

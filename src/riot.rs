@@ -221,6 +221,12 @@ impl Riot {
         self.get(Host::Glz, &format!("/core-game/v1/matches/{id}")).await
     }
 
+    /// Your own latest RR changes.
+    pub async fn my_comp_updates(&self, count: u32) -> Result<Option<Value>> {
+        let path = format!("/mmr/v1/players/{}/competitiveupdates?startIndex=0&endIndex={count}&queue=competitive", self.puuid);
+        self.get(Host::Pd, &path).await
+    }
+
     pub async fn match_details(&self, id: &str) -> Result<Option<Value>> {
         self.get(Host::Pd, &format!("/match-details/v1/matches/{id}")).await
     }

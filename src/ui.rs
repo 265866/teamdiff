@@ -696,6 +696,18 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
         s("  –  ", dim()),
         s(them.to_string(), enemy().add_modifier(Modifier::BOLD)),
     ]));
+    if let Some(u) = &pg.rr {
+        let tier = content.tier_name(u.tier_after);
+        let filled = (u.rr_after.min(100) as usize * 20).div_ceil(100);
+        let bar_style = if u.rr_earned >= 0 { good() } else { bad() };
+        rows.push(center(vec![
+            s(tier.clone(), rank_style(&tier)),
+            s(format!("  {} RR  ", u.rr_after), dim()),
+            s("▇".repeat(filled), bar_style),
+            s("▇".repeat(20 - filled), fg(rgb(0x2a, 0x31, 0x3a))),
+            s(format!("  {:+}", u.rr_earned), bar_style.add_modifier(Modifier::BOLD)),
+        ]));
+    }
     rows.push(blank());
 
     let cols = pg_cols();

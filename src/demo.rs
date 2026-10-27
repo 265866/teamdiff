@@ -3,7 +3,7 @@
 use crate::content::Content;
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Postgame, Side, Slot};
 use crate::presence::{LoopState, Presence};
-use crate::stats::{MatchSummary, PlayerMatch, Record};
+use crate::stats::{CompUpdate, MatchSummary, PlayerMatch, Record};
 use crate::tracker::{ActStats, Profile, RecentMatch};
 use chrono::{Duration as Days, Utc};
 use serde_json::{Value, json};
@@ -189,7 +189,21 @@ fn postgame(win: bool, lobby: Lobby) -> Postgame {
         }
         s.teams = HashMap::from([("Red".into(), (9, false)), ("Blue".into(), (13, true))]);
     }
-    Postgame { match_id: "demo-match".into(), summary: Some(Arc::new(s)), lobby: Some(lobby), shown_at: Some(Instant::now()) }
+    let rr = if win { 21 } else { -16 };
+    Postgame {
+        match_id: "demo-match".into(),
+        summary: Some(Arc::new(s)),
+        rr: Some(CompUpdate {
+            match_id: "demo-match".into(),
+            map_url: ASCENT.into(),
+            act_id: "a6".into(),
+            rr_earned: rr,
+            tier_after: 19,
+            rr_after: (47 + rr) as u32,
+        }),
+        lobby: Some(lobby),
+        shown_at: Some(Instant::now()),
+    }
 }
 
 /// The demo model for one of [`SCREENS`].
@@ -374,11 +388,13 @@ mod tests {
         let omen = s.iter().position(|l| l.contains("Omen") && l.contains("431")).unwrap();
         let me = s.iter().position(|l| l.contains("Alpha")).unwrap();
         assert!(omen < me, "sorted by Performance Score");
+        assert!(s.iter().any(|l| l.contains("+21")));
     }
 
     #[test]
-    fn defeat_banner_and_score() {
+    fn defeat_banner_and_rr() {
         let s = screen("defeat").join("\n");
+        assert!(s.contains("-16"));
         assert!(s.contains("9  –  13"));
     }
 

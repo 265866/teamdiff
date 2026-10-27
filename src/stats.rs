@@ -1,4 +1,4 @@
-//! Records and per-match stats.
+//! Records, RR changes, and per-match stats.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -28,6 +28,35 @@ pub enum RecordSource {
 pub struct ActRecord {
     pub record: Record,
     pub source: RecordSource,
+}
+
+/// One entry of `/mmr/v1/players/{puuid}/competitiveupdates`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompUpdate {
+    pub match_id: String,
+    pub map_url: String,
+    pub act_id: String,
+    pub rr_earned: i32,
+    pub tier_after: u32,
+    pub rr_after: u32,
+}
+
+pub fn parse_comp_updates(v: &Value) -> Vec<CompUpdate> {
+    v["Matches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            Some(CompUpdate {
+                match_id: m["MatchID"].as_str()?.to_string(),
+                map_url: m["MapID"].as_str().unwrap_or("").to_string(),
+                act_id: m["SeasonID"].as_str().unwrap_or("").to_lowercase(),
+                rr_earned: m["RankedRatingEarned"].as_i64().unwrap_or(0) as i32,
+                tier_after: m["TierAfterUpdate"].as_u64().unwrap_or(0) as u32,
+                rr_after: m["RankedRatingAfterUpdate"].as_u64().unwrap_or(0) as u32,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -204,6 +233,16 @@ pub fn pooled_kd_hs<'a>(matches: impl IntoIterator<Item = &'a PlayerMatch>) -> (
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn comp_updates_parse_rr_changes() {
+        let updates = parse_comp_updates(&json!({ "Matches": [
+            { "MatchID": "1", "MapID": "/Game/Maps/Ascent/Ascent", "SeasonID": "A6", "RankedRatingEarned": -16, "TierAfterUpdate": 17, "RankedRatingAfterUpdate": 31 },
+            { "MapID": "no id" }
+        ]}));
+        assert_eq!(updates.len(), 1);
+        assert_eq!((updates[0].act_id.as_str(), updates[0].rr_earned, updates[0].tier_after, updates[0].rr_after), ("a6", -16, 17, 31));
+    }
 
     fn match_json() -> Value {
         json!({

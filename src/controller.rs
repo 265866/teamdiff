@@ -4,7 +4,7 @@ use crate::local_files::browser_profile_dir;
 use crate::model::{Load, Lobby, Model, Phase, PlayerData, Postgame, parse_coregame, parse_pregame};
 use crate::presence::LoopState;
 use crate::riot::{Riot, connect};
-use crate::stats::parse_match;
+use crate::stats::{parse_comp_updates, parse_match};
 use crate::tracker::{self, Tracker, riot_id_path};
 use anyhow::Result;
 use std::collections::HashSet;
@@ -428,7 +428,7 @@ fn private_or<T>(result: Result<T>) -> Result<Load<T>> {
     }
 }
 
-/// After a match: waits for its details.
+/// After a match: waits for its details and your RR change.
 async fn postgame(riot: Arc<Riot>, shared: Shared, match_id: String) {
     const POLL: Duration = Duration::from_secs(5);
     const ATTEMPTS: u32 = 120;
@@ -449,10 +449,29 @@ async fn postgame(riot: Arc<Riot>, shared: Shared, match_id: String) {
         lock(&shared).give_up_postgame(&match_id);
         return;
     };
-    let mut m = lock(&shared);
-    if let Some(p) = m.postgame.as_mut().filter(|p| p.match_id == match_id) {
-        p.summary = Some(summary);
-        p.shown_at = Some(Instant::now());
+    {
+        let mut m = lock(&shared);
+        if let Some(p) = m.postgame.as_mut().filter(|p| p.match_id == match_id) {
+            p.summary = Some(summary.clone());
+            p.shown_at = Some(Instant::now());
+        }
+    }
+    if summary.queue != "competitive" {
+        return;
+    }
+    for _ in 0..ATTEMPTS {
+        if !still_current(&shared) {
+            return;
+        }
+        if let Ok(Some(v)) = riot.my_comp_updates(3).await
+            && let Some(u) = parse_comp_updates(&v).into_iter().find(|u| u.match_id == match_id)
+        {
+            if let Some(p) = lock(&shared).postgame.as_mut().filter(|p| p.match_id == match_id) {
+                p.rr = Some(u);
+            }
+            return;
+        }
+        tokio::time::sleep(POLL).await;
     }
 }
 
