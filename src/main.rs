@@ -3,6 +3,7 @@ mod content;
 mod controller;
 mod demo;
 mod goldstars;
+mod icons;
 mod local_files;
 mod model;
 mod presence;
@@ -105,8 +106,16 @@ async fn main() -> Result<()> {
     run_ui(shared, demo_screen)
 }
 
+/// Whether the terminal is one that answers the graphics query. One that doesn't would stall startup
+/// for two seconds and swallow the next keypress, so every other terminal keeps the text labels.
+fn asks_for_images() -> bool {
+    std::env::var_os("WT_SESSION").is_some() || std::env::var("TERM_PROGRAM").is_ok_and(|t| t == "WezTerm" || t == "vscode")
+}
+
 fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<()> {
     let mut terminal = ratatui::init();
+    let picker = asks_for_images().then(|| ratatui_image::picker::Picker::from_query_stdio().ok()).flatten();
+    let icons = icons::Icons::new(picker.as_ref());
     let mut ui = UiState::default();
     let mut last_phase = None;
     let result = (|| -> Result<()> {
@@ -120,7 +129,7 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
                     m.viewing = None;
                     last_phase = Some(m.phase.clone());
                 }
-                terminal.draw(|f| ui::draw(f, &m, &ui))?;
+                terminal.draw(|f| ui::draw(f, &m, &ui, &icons))?;
                 ui::animating(&m)
             };
             let wait = Duration::from_millis(if animating { 50 } else { 250 });

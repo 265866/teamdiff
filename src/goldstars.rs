@@ -25,8 +25,8 @@ pub enum Accolade {
 }
 
 impl Accolade {
-    /// Display order in the accolades column and the legend. MVP is shown as its own label instead.
-    pub const LISTED: [Accolade; 11] = [
+    /// Display order for icons. MVP is shown as its own label, not an icon.
+    pub const ICONS: [Accolade; 11] = [
         Self::Masterful,
         Self::TopFrag,
         Self::Kills,
@@ -72,7 +72,7 @@ impl Accolade {
         }
     }
 
-    /// Two-letter label, used where the full name doesn't fit.
+    /// Two-letter fallback for terminals without image support.
     pub fn abbrev(self) -> &'static str {
         match self {
             Self::Mvp => "MV",

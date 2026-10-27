@@ -436,7 +436,7 @@ mod tests {
         assert!(s[omen].contains("MATCH MVP"));
         assert!(s.iter().any(|l| l.contains("Echo") && l.contains("TEAM MVP")));
         assert!(s.iter().any(|l| l.contains("New act best") && l.contains("5 first bloods")));
-        assert!(s[me].contains("TFKLFBDM"), "accolades in a fixed order: {}", s[me]);
+        assert!(s[me].contains("TFKLFBDM"), "text placeholders for accolades in fixed order: {}", s[me]);
         assert!(s.iter().any(|l| l.contains("+21")));
     }
 
@@ -476,10 +476,35 @@ mod tests {
     }
 
     #[test]
-    fn legend_lists_every_accolade() {
+    fn accolades_draw_as_sixel_images_in_their_slots() {
+        use ratatui_image::picker::{Picker, ProtocolType};
+        let mut picker = Picker::halfblocks();
+        picker.set_protocol_type(ProtocolType::Sixel);
+        let icons = crate::icons::Icons::new(Some(&picker));
+        let buf = crate::ui::tests::render_buffer(&model("victory"), &UiState::default(), &icons, WIDTH, 50);
+        let text = render(&model("victory"), &UiState::default(), WIDTH, 50);
+        let mut images = Vec::new();
+        for y in 0..50u16 {
+            for x in 0..WIDTH {
+                if buf[(x, y)].symbol().contains("P") {
+                    images.push((x, y));
+                }
+            }
+        }
+        // Omen 4, me 4, Sova 2, Killjoy 1, Raze 2, Breach 1, Clove 1.
+        assert_eq!(images.len(), 15, "{images:?}");
+        let header = text.iter().find(|l| l.contains("ACCOLADES")).unwrap();
+        let header_x = header[..header.find("ACCOLADES").unwrap()].chars().count() as u16;
+        let me_y = text.iter().position(|l| l.contains("Alpha")).unwrap() as u16;
+        let mine: Vec<u16> = images.iter().filter(|(_, y)| *y == me_y).map(|(x, _)| *x).collect();
+        assert_eq!(mine, [header_x, header_x + 2, header_x + 4, header_x + 6], "my four icons sit in order under the header");
+    }
+
+    #[test]
+    fn legend_lists_every_icon() {
         let ui = UiState { legend: true, ..Default::default() };
         let s = render(&model("victory"), &ui, WIDTH, 50).join("\n");
-        for k in Accolade::LISTED {
+        for k in Accolade::ICONS {
             assert!(s.contains(k.name()), "{k:?}");
         }
     }

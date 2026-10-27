@@ -2,6 +2,7 @@
 
 use crate::content::Content;
 use crate::goldstars::{ALL_TIME, Accolade, format_value};
+use crate::icons::Icons;
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::riot::NetStats;
 use crate::stats::{MatchSummary, Record, RecordSource, pooled_kd_hs};
@@ -106,9 +107,23 @@ fn width(segs: &[Seg]) -> usize {
     segs.iter().map(|s| s.content.width()).sum()
 }
 
+/// A cell's content plus accolade icons placed at column offsets within it.
+#[derive(Default, Clone)]
+struct Cell {
+    segs: Vec<Seg>,
+    icons: Vec<(usize, Accolade)>,
+}
+
+impl From<Vec<Seg>> for Cell {
+    fn from(segs: Vec<Seg>) -> Self {
+        Cell { segs, icons: Vec::new() }
+    }
+}
+
 #[derive(Default, Clone)]
 struct Row {
     segs: Vec<Seg>,
+    icons: Vec<(usize, Accolade)>,
     bg: Option<Color>,
 }
 
@@ -167,19 +182,23 @@ fn col(title: &str, w: usize, right: bool) -> Col {
 
 /// Joins cells into a row. The first two columns (cursor and party marker) sit together; the rest
 /// are separated by one space.
-fn join(cols: &[Col], cells: Vec<Vec<Seg>>) -> Row {
+fn join(cols: &[Col], cells: Vec<Cell>) -> Row {
     let mut row = Row::default();
+    let mut x = 0;
     for (i, (c, cell)) in cols.iter().zip(cells).enumerate() {
         if i > 1 {
             row.segs.push(s(" ", Style::new()));
+            x += 1;
         }
-        row.segs.extend(fit(cell, c.w, c.right));
+        row.icons.extend(cell.icons.iter().map(|(o, k)| (x + o, *k)));
+        row.segs.extend(fit(cell.segs, c.w, c.right));
+        x += c.w;
     }
     row
 }
 
 fn header(cols: &[Col]) -> Row {
-    join(cols, cols.iter().map(|c| vec![s(c.title.clone(), dim())]).collect())
+    join(cols, cols.iter().map(|c| vec![s(c.title.clone(), dim())].into()).collect())
 }
 
 fn center(segs: Vec<Seg>) -> Row {
@@ -392,7 +411,7 @@ fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool,
             (kd, hs)
         }
     };
-    let mut row = join(cols, vec![sel, party_cell, agent, name, lvl, rank, peak, act, map, kd, hs]);
+    let mut row = join(cols, [sel, party_cell, agent, name, lvl, rank, peak, act, map, kd, hs].into_iter().map(Cell::from).collect());
     if cursor {
         row.bg = Some(CURSOR_BG);
     }
@@ -765,19 +784,22 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
         };
         let diff = p.kills as i64 - p.deaths as i64;
         let earned = pg.accolades.as_ref().and_then(|a| a.players.get(puuid));
-        let acc: Vec<Seg> =
-            Accolade::LISTED.iter().filter(|k| earned.is_some_and(|e| e.contains_key(k))).map(|k| s(k.abbrev(), dim())).collect();
+        let mut acc = Cell::default();
+        for (i, k) in Accolade::ICONS.iter().filter(|k| earned.is_some_and(|e| e.contains_key(k))).enumerate() {
+            acc.icons.push((i * 2, *k));
+            acc.segs.push(s(k.abbrev(), dim()));
+        }
         let perf = p.performance.map(|v| v.round().to_string()).unwrap_or_else(|| "—".into());
-        let cells = vec![
-            vec![s(if cursor_id.as_deref() == Some(puuid.as_str()) { "▸" } else { " " }, ally())],
-            party.get(puuid).map(|mark| vec![mark.clone()]).unwrap_or_else(|| vec![s(" ", Style::new())]),
-            vec![s(content.agent(&p.agent_id), bold())],
-            name_segs(m, puuid, incognito(puuid), Some(&p.agent_id)),
-            vec![s(perf, if label.is_some() { gold() } else { bold() })],
-            vec![s(p.acs().to_string(), text())],
-            vec![s(p.kills.to_string(), text())],
-            vec![s(p.deaths.to_string(), text())],
-            vec![s(p.assists.to_string(), text())],
+        let cells: Vec<Cell> = vec![
+            vec![s(if cursor_id.as_deref() == Some(puuid.as_str()) { "▸" } else { " " }, ally())].into(),
+            party.get(puuid).map(|mark| vec![mark.clone()]).unwrap_or_else(|| vec![s(" ", Style::new())]).into(),
+            vec![s(content.agent(&p.agent_id), bold())].into(),
+            name_segs(m, puuid, incognito(puuid), Some(&p.agent_id)).into(),
+            vec![s(perf, if label.is_some() { gold() } else { bold() })].into(),
+            vec![s(p.acs().to_string(), text())].into(),
+            vec![s(p.kills.to_string(), text())].into(),
+            vec![s(p.deaths.to_string(), text())].into(),
+            vec![s(p.assists.to_string(), text())].into(),
             vec![s(
                 format!("{diff:+}").replace("+0", "0"),
                 if diff > 0 {
@@ -787,11 +809,12 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
                 } else {
                     dim()
                 },
-            )],
-            vec![s(p.adr().to_string(), text())],
-            vec![s(p.hs_pct().map(|h| format!("{h}%")).unwrap_or_else(|| "—".into()), text())],
-            vec![s(p.first_kills.to_string(), text())],
-            vec![s(label.unwrap_or(""), gold())],
+            )]
+            .into(),
+            vec![s(p.adr().to_string(), text())].into(),
+            vec![s(p.hs_pct().map(|h| format!("{h}%")).unwrap_or_else(|| "—".into()), text())].into(),
+            vec![s(p.first_kills.to_string(), text())].into(),
+            vec![s(label.unwrap_or(""), gold())].into(),
             acc,
         ];
         let mut row = join(&cols, cells);
@@ -809,8 +832,11 @@ const HALF: usize = 50;
 fn two(left: Row, right: Row) -> Row {
     let mut segs = fit(left.segs, HALF, false);
     segs.push(s("    ", Style::new()));
+    let off = HALF + 4;
+    let mut icons = left.icons;
+    icons.extend(right.icons.into_iter().map(|(o, k)| (o + off, k)));
     segs.extend(right.segs);
-    Row { segs, bg: None }
+    Row { segs, icons, bg: None }
 }
 
 fn bar(p: u32) -> Vec<Seg> {
@@ -957,6 +983,7 @@ fn accolade_rows(m: &Model) -> Vec<Row> {
                 s(" ", Style::new()),
                 s(format!("{:>4}", best(t.count, t.best)), text()),
             ],
+            icons: vec![(2, k)],
             bg: None,
         });
     }
@@ -1073,9 +1100,9 @@ fn too_small(f: &mut Frame, need_w: u16, need_h: u16) {
     f.render_widget(p, rect);
 }
 
-const LEGEND_HEIGHT: u16 = Accolade::LISTED.len() as u16 + 4;
+const LEGEND_HEIGHT: u16 = Accolade::ICONS.len() as u16 + 4;
 
-fn legend(f: &mut Frame, origin: Rect) {
+fn legend(f: &mut Frame, origin: Rect, icons: &Icons) {
     let h = LEGEND_HEIGHT;
     let w = 30u16;
     let rect = Rect {
@@ -1086,7 +1113,7 @@ fn legend(f: &mut Frame, origin: Rect) {
     };
     let lines: Vec<Line> = std::iter::once(Line::default())
         .chain(
-            Accolade::LISTED
+            Accolade::ICONS
                 .iter()
                 .map(|k| Line::from(vec![s("   ", Style::new()), s(k.abbrev(), dim()), s(format!("  {}", k.name()), text())])),
         )
@@ -1101,9 +1128,12 @@ fn legend(f: &mut Frame, origin: Rect) {
         ),
         rect,
     );
+    for (i, k) in Accolade::ICONS.iter().enumerate() {
+        icons.draw(f, *k, Rect { x: rect.x + 4, y: rect.y + 2 + i as u16, width: 2, height: 1 });
+    }
 }
 
-pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
+pub fn draw(f: &mut Frame, m: &Model, ui: &UiState, icons: &Icons) {
     let sc = screen(m, ui);
     let status = match &m.last_error {
         Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
@@ -1127,6 +1157,7 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
     if !status.is_empty() {
         block = block.title_bottom(Line::from([vec![s(" ", border())], status, vec![s(" ─", border())]].concat()).right_aligned());
     }
+    let inner = block.inner(rect);
     let lines: Vec<Line> = sc
         .rows
         .iter()
@@ -1139,8 +1170,16 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines).style(text()).block(block), rect);
+    for (y, row) in sc.rows.iter().enumerate() {
+        for (x, k) in &row.icons {
+            let r = Rect { x: inner.x + *x as u16, y: inner.y + y as u16, width: 2, height: 1 };
+            if r.right() <= inner.right() && r.y < inner.bottom() {
+                icons.draw(f, *k, r);
+            }
+        }
+    }
     if ui.legend {
-        legend(f, rect);
+        legend(f, rect, icons);
     }
 }
 
@@ -1156,10 +1195,14 @@ pub mod tests {
     use ratatui::backend::TestBackend;
 
     pub fn render(m: &Model, ui: &UiState, w: u16, h: u16) -> Vec<String> {
-        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        t.draw(|f| draw(f, m, ui)).unwrap();
-        let buf = t.backend().buffer();
+        let buf = render_buffer(m, ui, &Icons::default(), w, h);
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect()
+    }
+
+    pub fn render_buffer(m: &Model, ui: &UiState, icons: &Icons, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| draw(f, m, ui, icons)).unwrap();
+        t.backend().buffer().clone()
     }
 
     #[test]
