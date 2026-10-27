@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - run: cargo fmt --all -- --check
+
+  check:
+    # teamdiff runs on Windows only: it reads the Riot Client's files.
+    name: clippy and test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-targets --all-features
+
+  commits:
+    name: commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # HEAD is GitHub's merge commit, so HEAD^1..HEAD is exactly the PR's commits. Only their SHAs
+      # are printed: a subject can hold personal data, which the privacy job reports without repeating.
+      - name: Check commit subjects are Conventional Commits
+        run: |
+          set -o pipefail
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\([a-z0-9][a-z0-9_/-]*\)!?: [^ ].*$'
+          bad=$(git log --no-merges --format=%H HEAD^1..HEAD | while read -r sha; do
+            [[ "$(git log -1 --format=%s "$sha")" =~ $pattern ]] || echo "$sha"
+          done)
+          if [ -n "$bad" ]; then
+            printf '::error::Commit subjects must look like "feat(lobby): show ranks". These commits do not:\n%s\n' "$bad"
+            exit 1
+          fi
+
+  privacy:
+    name: privacy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Forks don't get the secret; their PRs are still checked against every pattern, and main is
+      # checked against the denylist again once they merge.
+      - name: Write the denylist
+        env:
+          DENYLIST: ${{ secrets.PRIVACY_DENYLIST }}
+          FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          if [ -z "$DENYLIST" ] && [ "$FORK" != true ]; then
+            echo '::error::The PRIVACY_DENYLIST secret is missing or empty.'
+            exit 1
+          fi
+          printf '%s\n' "$DENYLIST" > .privacy-denylist
+      - run: scripts/privacy-check.sh --history

@@ -1,0 +1,16 @@
+[package]
+name = "teamdiff"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A terminal companion for VALORANT on Windows: your lobby's ranks, records and recent form, and the post-game results"
+repository = "https://github.com/265866/teamdiff"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["valorant", "tui", "terminal", "stats"]
+categories = ["command-line-utilities", "games"]
+publish = false
+
+[profile.release]
+lto = true
+codegen-units = 1

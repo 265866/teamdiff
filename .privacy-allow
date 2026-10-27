@@ -1,0 +1,4 @@
+# Values scripts/privacy-check.sh accepts. Add one only for public data, and say what it is.
+#
+# uuid <value>          a public game-content id, as valorant-api.com and the game files list it
+# binary <path> <sha256> a binary file, such as an image, someone has checked holds no personal data
