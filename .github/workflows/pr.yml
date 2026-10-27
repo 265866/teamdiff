@@ -1,0 +1,25 @@
+name: PR
+
+# Separate from CI so that editing a PR's title or description reruns only this.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)\([a-z0-9][a-z0-9_/-]*\)!?: [^ ].*$'
+          if ! printf '%s\n' "$TITLE" | grep -Eq "$pattern"; then
+            echo '::error::The PR title must look like "feat(lobby): show ranks".'
+            exit 1
+          fi
