@@ -19,6 +19,9 @@ Then build and run it:
 cargo run --release
 ```
 
+`cargo run -- --demo` shows every screen with made-up players, without the game. Use it to check how a
+change looks; Tab moves to the next screen.
+
 ## Check
 
 Run the checks in [AGENTS.md](AGENTS.md#checks) before you commit. CI runs the same ones on every pull
