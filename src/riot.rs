@@ -1,7 +1,8 @@
 //! HTTP access to the Riot Client's local API and Riot's game servers.
 //!
-//! Every call here is a read the game client itself makes: the lobby and Riot IDs. The only PUT is
-//! the name lookup, which takes a list of player ids and changes nothing.
+//! Every call here is a read the game client itself makes: the lobby and Riot IDs. Nothing here asks
+//! about another player's stats; those come from tracker.gg. The only PUT is the name lookup, which
+//! takes a list of player ids and changes nothing.
 
 use crate::local_files::{GameLogInfo, Lockfile, game_log_path, lockfile_path, parse_game_log, parse_lockfile};
 use crate::presence::{Presence, parse_presences};
@@ -278,16 +279,17 @@ pub fn dump(dir: Option<&Path>, label: &str, v: &Value) {
     let _ = std::fs::write(dir.join(format!("{stamp}_{}.json", name.trim_matches('_'))), serde_json::to_vec_pretty(v).unwrap_or_default());
 }
 
-/// Static content from valorant-api.com (names for agents and maps).
+/// Static content from valorant-api.com (names for agents, maps, ranks and acts).
 pub async fn fetch_content() -> Result<crate::content::Content> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
     let get = |path: &'static str| {
         let client = client.clone();
         async move { client.get(format!("https://valorant-api.com/v1/{path}")).send().await?.error_for_status()?.json::<Value>().await }
     };
-    let (agents, maps) =
-        tokio::try_join!(get("agents?isPlayableCharacter=true"), get("maps")).context("couldn't load names from valorant-api.com")?;
-    Ok(crate::content::Content::from_responses(&agents, &maps))
+    let (agents, maps, tiers, seasons) =
+        tokio::try_join!(get("agents?isPlayableCharacter=true"), get("maps"), get("competitivetiers"), get("seasons"))
+            .context("couldn't load names from valorant-api.com")?;
+    Ok(crate::content::Content::from_responses(&agents, &maps, &tiers, &seasons))
 }
 
 #[cfg(test)]

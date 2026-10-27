@@ -24,7 +24,7 @@ jobs:
       - run: cargo fmt --all -- --check
 
   check:
-    # teamdiff runs on Windows only: it reads the Riot Client's files.
+    # teamdiff runs on Windows only: it reads the Riot Client's files and drives WebView2.
     name: clippy and test
     runs-on: windows-latest
     timeout-minutes: 30

@@ -1,3 +1,4 @@
+mod browser;
 mod content;
 mod controller;
 mod demo;
@@ -5,6 +6,8 @@ mod local_files;
 mod model;
 mod presence;
 mod riot;
+mod stats;
+mod tracker;
 mod ui;
 
 use anyhow::Result;
@@ -13,6 +16,7 @@ use model::Model;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use ui::{UiState, View};
 
 const HELP: &str = "teamdiff: a terminal tracker for your VALORANT matches
 
@@ -23,11 +27,12 @@ USAGE:
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
     --demo         Show sample data instead of connecting; Tab cycles screens
-                   (waiting, menus, agent-select, in-game)
+                   (waiting, menus, agent-select, loading, in-game)
     -h, --help     Show this help
 
 KEYS:
-    q        quit
+    up/down  select a player     enter  details
+    esc      back                q      quit
 
 teamdiff isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
 anyone officially involved in producing or managing Riot Games properties. Riot Games, and all
@@ -101,9 +106,21 @@ async fn main() -> Result<()> {
 
 fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<()> {
     let mut terminal = ratatui::init();
+    let mut ui = UiState::default();
+    let mut last_phase = None;
     let result = (|| -> Result<()> {
         loop {
-            terminal.draw(|f| ui::draw(f, &controller::lock(&shared)))?;
+            {
+                let mut m = controller::lock(&shared);
+                if last_phase.as_ref() != Some(&m.phase) {
+                    // A new phase shows other players, so a details view from the last one closes.
+                    ui.cursor = 0;
+                    ui.view = View::Main;
+                    m.viewing = None;
+                    last_phase = Some(m.phase.clone());
+                }
+                terminal.draw(|f| ui::draw(f, &m, &ui))?;
+            }
             if !event::poll(Duration::from_millis(250))? {
                 continue;
             }
@@ -111,13 +128,27 @@ fn run_ui(shared: controller::Shared, mut demo_screen: Option<usize>) -> Result<
             if key.kind != KeyEventKind::Press {
                 continue;
             }
+            let players = ui::selectable(&controller::lock(&shared));
             match key.code {
                 KeyCode::Char('q') => return Ok(()),
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                KeyCode::Esc => {
+                    ui.view = View::Main;
+                    controller::lock(&shared).viewing = None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => ui.cursor = ui.cursor.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => ui.cursor = (ui.cursor + 1).min(players.len().saturating_sub(1)),
+                KeyCode::Enter => {
+                    if let Some(p) = players.get(ui.cursor.min(players.len().saturating_sub(1))) {
+                        ui.view = View::Detail(p.clone());
+                        controller::lock(&shared).viewing = Some(p.clone());
+                    }
+                }
                 KeyCode::Tab if demo_screen.is_some() => {
                     let next = (demo_screen.unwrap_or(0) + 1) % demo::SCREENS.len();
                     demo_screen = Some(next);
                     *controller::lock(&shared) = demo::model(demo::SCREENS[next]);
+                    ui = UiState::default();
                 }
                 _ => {}
             }

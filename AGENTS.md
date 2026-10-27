@@ -19,7 +19,8 @@ cargo test --locked --all-targets --all-features
 scripts/privacy-check.sh
 ```
 
-teamdiff builds and runs only on Windows.
+teamdiff builds and runs only on Windows. Some tests start a hidden WebView2 browser, which needs the
+Microsoft Edge WebView2 Runtime.
 
 ## What teamdiff never shows
 

@@ -3,6 +3,8 @@
 use crate::content::Content;
 use crate::presence::Presence;
 use crate::riot::NetStats;
+use crate::stats::Record;
+use crate::tracker::{ActStats, Profile, RecentMatch};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -110,9 +112,45 @@ pub fn parse_coregame(v: &Value, me: &str) -> Option<Lobby> {
     })
 }
 
+/// Data fetched from tracker.gg for one player.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum Load<T> {
+    #[default]
+    Loading,
+    /// tracker.gg has no such player.
+    Missing,
+    /// The player hasn't made their tracker.gg profile public.
+    Private,
+    Ready(T),
+}
+
+impl<T> Load<T> {
+    pub fn ready(&self) -> Option<&T> {
+        match self {
+            Load::Ready(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Load<U> {
+        match self {
+            Load::Loading => Load::Loading,
+            Load::Missing => Load::Missing,
+            Load::Private => Load::Private,
+            Load::Ready(t) => Load::Ready(f(t)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PlayerData {
     pub name: Option<(String, String)>,
+    pub profile: Load<Profile>,
+    /// Wins and losses per map this act, by map name.
+    pub maps: Load<Vec<(String, Record)>>,
+    pub recent: Load<Vec<RecentMatch>>,
+    /// Older acts, loaded when the player's details are opened.
+    pub history: Vec<ActStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +161,8 @@ pub struct Model {
     pub content: Arc<Content>,
     pub lobby: Option<Lobby>,
     pub players: HashMap<String, PlayerData>,
+    /// The player whose details are open, so their older acts get loaded.
+    pub viewing: Option<String>,
     /// Latest presence per player.
     pub presences: HashMap<String, Presence>,
     /// The latest request failure and when it happened; shown briefly in the footer.
@@ -139,6 +179,7 @@ impl Model {
             content,
             lobby: None,
             players: HashMap::new(),
+            viewing: None,
             presences: HashMap::new(),
             last_error: None,
             net: None,

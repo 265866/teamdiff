@@ -10,6 +10,8 @@ teamdiff runs on Windows 10 and 11. You need:
 - Rust, installed with [rustup](https://rustup.rs). `rust-toolchain.toml` selects the stable
   toolchain with rustfmt and clippy.
 - The Visual Studio C++ build tools, which Rust needs on Windows.
+- The Microsoft Edge WebView2 Runtime. Windows 11 includes it; on Windows 10, install it from
+  [Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/) if it's missing.
 
 Then build and run it:
 

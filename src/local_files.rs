@@ -28,6 +28,11 @@ pub fn lockfile_path() -> Option<PathBuf> {
     local_app_data().map(|d| d.join("Riot Games").join("Riot Client").join("Config").join("lockfile"))
 }
 
+/// The tracker.gg browser's own profile, which keeps its cookies between runs.
+pub fn browser_profile_dir() -> Option<PathBuf> {
+    local_app_data().map(|d| d.join("teamdiff").join("WebView2"))
+}
+
 pub fn game_log_path() -> Option<PathBuf> {
     local_app_data().map(|d| d.join("VALORANT").join("Saved").join("Logs").join("ShooterGame.log"))
 }
