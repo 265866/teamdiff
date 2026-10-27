@@ -129,6 +129,8 @@ struct Session {
     named: Claims,
     /// Players whose older acts were loaded for their details.
     history: Claims,
+    /// Past matches whose parties were loaded.
+    match_parties: Claims,
     goldstars_requested: Arc<AtomicBool>,
     client_gone: bool,
 }
@@ -145,6 +147,7 @@ impl Session {
             requested: Claims::default(),
             named: Claims::default(),
             history: Claims::default(),
+            match_parties: Claims::default(),
             goldstars_requested: Arc::default(),
             client_gone: false,
         }
@@ -242,7 +245,45 @@ impl Session {
             }
         };
         self.show_lobby(Phase::Ingame, lobby);
+        self.load_match_parties();
         Ok(())
+    }
+
+    /// Loads who partied with whom in each player's last match, so a party shows in game even when
+    /// only one of its members has a public tracker.gg profile.
+    fn load_match_parties(&mut self) {
+        let wanted: Vec<String> = {
+            let m = lock(&self.shared);
+            let Some(lobby) = &m.lobby else { return };
+            let mut ids: Vec<String> = lobby
+                .slots
+                .iter()
+                .filter(|s| !s.incognito)
+                .filter_map(|s| m.players.get(&s.puuid)?.last_match.clone())
+                .filter(|id| !m.match_parties.contains_key(id))
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+        for id in wanted {
+            if !claim(&self.match_parties, &id) {
+                continue;
+            }
+            let (tracker, shared, claims) = (self.tracker.clone(), self.shared.clone(), self.match_parties.clone());
+            tokio::spawn(async move {
+                match tracker.match_players(&id).await {
+                    Ok(v) => {
+                        let parties = v.map(|v| tracker::parse_match_parties(&v)).unwrap_or_default();
+                        lock(&shared).match_parties.insert(id, parties);
+                    }
+                    Err(e) => {
+                        report(&shared, &e);
+                        release_after(claims, vec![id], RETRY_AFTER).await;
+                    }
+                }
+            });
+        }
     }
 
     fn show_lobby(&mut self, phase: Phase, lobby: Lobby) {
@@ -410,6 +451,8 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
             d.profile = state(private);
             d.maps = state(private);
             d.recent = state(private);
+            d.sides.clear();
+            d.last_match = None;
         })
     };
     let v = match tracker.profile(riot_id).await {
@@ -440,11 +483,21 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
     let maps = private_or(maps)?.map(|v| v.map(|v| tracker::parse_maps(&v)).unwrap_or_default());
     update(shared, puuid, |d| d.maps = maps);
     let Load::Ready(v) = private_or(tracker.matches(riot_id).await)? else {
-        update(shared, puuid, |d| d.recent = Load::Private);
+        update(shared, puuid, |d| {
+            d.recent = Load::Private;
+            d.sides.clear();
+            d.last_match = None;
+        });
         return Ok(());
     };
     let recent = v.as_ref().map(|v| tracker::parse_matches(v, RECENT_MATCHES)).unwrap_or_default();
-    update(shared, puuid, |d| d.recent = Load::Ready(recent));
+    let sides = v.as_ref().map(tracker::parse_match_sides).unwrap_or_default();
+    let last_match = v.as_ref().and_then(|v| v["data"]["matches"][0]["attributes"]["id"].as_str()).map(str::to_lowercase);
+    update(shared, puuid, |d| {
+        d.recent = Load::Ready(recent);
+        d.sides = sides;
+        d.last_match = last_match;
+    });
     Ok(())
 }
 
@@ -595,6 +648,9 @@ mod tests {
     async fn private_maps_or_matches_are_private_not_a_failure() {
         let answer = crate::tracker::tests::answer;
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        // Public in an earlier match this session.
+        let side = crate::tracker::MatchSide { match_id: "m1".into(), rounds_won: 13, rounds_lost: 7 };
+        lock(&shared).players.insert("p".into(), PlayerData { sides: vec![side], last_match: Some("m1".into()), ..Default::default() });
         let refused = || answer(451, None, "");
         let tracker = Tracker::canned(vec![answer(200, None, &profile_body("public")), refused(), refused()]);
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
@@ -602,6 +658,7 @@ mod tests {
         let d = &m.players["p"];
         assert_eq!(d.profile.ready().map(|p| p.tier), Some(14));
         assert_eq!((d.maps.clone().map(|_| ()), d.recent.clone().map(|_| ())), (Load::Private, Load::Private));
+        assert!(d.sides.is_empty() && d.last_match.is_none(), "an old history isn't used once it's private");
     }
 
     /// tracker.gg's `platformUserId` is its own id, never the Riot puuid the lobby uses.

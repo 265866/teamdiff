@@ -31,6 +31,8 @@ pub struct Presence {
     pub puuid: String,
     pub state: Option<LoopState>,
     pub party_id: Option<String>,
+    /// Everyone in that party, including players Riot shares no presence for.
+    pub party_size: Option<u32>,
     pub queue_id: Option<String>,
     /// (ally, enemy) rounds won, from the party owner's point of view.
     pub score: Option<(u32, u32)>,
@@ -70,6 +72,7 @@ fn decode(puuid: &str, private: &str) -> Option<Presence> {
         puuid: puuid.to_string(),
         state: str_of("sessionLoopState").map(|s| LoopState::parse(&s)),
         party_id: str_of("partyId"),
+        party_size: num_of("partySize"),
         queue_id: str_of("queueId"),
         score,
         queue_entry_time: str_of("queueEntryTime"),
@@ -105,6 +108,7 @@ mod tests {
         let p = &parse_presences(&body)[0];
         assert_eq!(p.state, Some(LoopState::Ingame));
         assert_eq!(p.party_id.as_deref(), Some("p1"));
+        assert_eq!(p.party_size, Some(2));
         assert_eq!(p.queue_id.as_deref(), Some("competitive"));
         assert_eq!(p.score, Some((5, 3)));
         assert_eq!(p.account_level, Some(214));
@@ -121,6 +125,7 @@ mod tests {
         let p = &parse_presences(&body)[0];
         assert_eq!(p.state, Some(LoopState::Pregame));
         assert_eq!(p.party_id.as_deref(), Some("p9"));
+        assert_eq!(p.party_size, Some(3));
         assert_eq!(p.score, None);
     }
 

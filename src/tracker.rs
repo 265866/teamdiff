@@ -42,7 +42,7 @@ enum Transport {
 }
 
 impl Transport {
-    async fn get(&self, url: &str) -> Result<Response> {
+    async fn get(&self, url: &str, trim: Option<&'static str>) -> Result<Response> {
         match self {
             Self::Browser { profile_dir, home, open } => {
                 let browser = {
@@ -59,7 +59,7 @@ impl Transport {
                     *open = Some((browser.clone(), Instant::now()));
                     browser
                 };
-                let result = browser.get(url).await;
+                let result = browser.get_trimmed(url, trim).await;
                 // A browser that timed out or stopped may be stuck; the next request starts a fresh one.
                 if result.is_err() {
                     let mut open = open.lock().await;
@@ -122,6 +122,8 @@ const BLOCK_PAUSE: Duration = Duration::from_secs(300);
 /// The longest `Retry-After` waited out inside a request; longer ones pause every request instead.
 const MAX_INLINE_WAIT: u64 = 30;
 const MAX_RETRY_AFTER: u64 = 86_400;
+/// Cuts a `/matches/{id}` response down to each player's Riot ID, team and party.
+pub(crate) const MATCH_PLAYERS: &str = r#"(v) => ({ data: { segments: (v?.data?.segments ?? []).filter((s) => s?.type === "player-summary").map((s) => ({ type: s.type, attributes: { platformUserIdentifier: s.attributes?.platformUserIdentifier }, metadata: { teamId: s.metadata?.teamId, partyId: s.metadata?.partyId } })) } })"#;
 /// How long the browser stays open without a request.
 const IDLE: Duration = Duration::from_secs(120);
 /// How long the browser may take to start, and a request to answer, page load included.
@@ -161,6 +163,11 @@ impl Tracker {
 
     /// GET on tracker.gg's API. `Ok(None)` means 404: no such player, or no data of that kind.
     async fn get(&self, path: &str) -> Result<Option<Value>> {
+        self.get_trimmed(path, None).await
+    }
+
+    /// `get`, with the body cut down in the page by the JavaScript function `trim`.
+    async fn get_trimmed(&self, path: &str, trim: Option<&'static str>) -> Result<Option<Value>> {
         let _permit = self.permits.acquire().await?;
         if let Some((until, why)) = *self.paused.lock().unwrap_or_else(|e| e.into_inner())
             && until > Instant::now()
@@ -168,20 +175,24 @@ impl Tracker {
             bail!("{why}; trying again in {} min", until.saturating_duration_since(Instant::now()).as_secs().div_ceil(60));
         }
         self.net.started.fetch_add(1, Ordering::Relaxed);
-        let result = self.get_with_retry(path).await;
+        let result = self.get_with_retry(path, trim).await;
         self.net.finished.fetch_add(1, Ordering::Relaxed);
-        if let Ok(Some(v)) = &result {
+        // Match pages name incognito players, so they aren't saved.
+        if let (Ok(Some(v)), None) = (&result, trim) {
             dump(self.dump_dir.as_deref(), &format!("tracker{}", path.split('?').next().unwrap_or(path)), v);
         }
         result
     }
 
-    async fn get_with_retry(&self, path: &str) -> Result<Option<Value>> {
+    async fn get_with_retry(&self, path: &str, trim: Option<&'static str>) -> Result<Option<Value>> {
         let label = path.split('?').next().unwrap_or(path);
         let mut reloaded = false;
         for attempt in 0..5u64 {
-            let resp =
-                self.transport.get(&format!("{API}{path}")).await.with_context(|| format!("tracker.gg request failed for {label}"))?;
+            let resp = self
+                .transport
+                .get(&format!("{API}{path}"), trim)
+                .await
+                .with_context(|| format!("tracker.gg request failed for {label}"))?;
             let status = resp.status;
             if status == 404 {
                 return Ok(None);
@@ -237,6 +248,13 @@ impl Tracker {
 
     pub async fn matches(&self, riot_id: &str) -> Result<Option<Value>> {
         self.get(&format!("/matches/riot/{riot_id}?platform=pc&type=competitive")).await
+    }
+
+    /// Who was in one finished match, and their teams and parties. The full response is about 2 MB of
+    /// round-by-round data, so the page keeps only the players. It names incognito players too; callers
+    /// only compare it against names they already have.
+    pub async fn match_players(&self, match_id: &str) -> Result<Option<Value>> {
+        self.get_trimmed(&format!("/matches/{match_id}"), Some(MATCH_PLAYERS)).await
     }
 }
 
@@ -353,6 +371,46 @@ pub fn parse_maps(v: &Value) -> Vec<(String, Record)> {
     maps
 }
 
+/// A match a player was in, with their team's score: two players with the same entry were teammates.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MatchSide {
+    pub match_id: String,
+    pub rounds_won: u32,
+    pub rounds_lost: u32,
+}
+
+/// Every decided match in a `/matches` response, as `MatchSide`s. A tie, or a match without a score,
+/// gives both teams the same entry, so it can't tell teammates apart and is left out.
+pub fn parse_match_sides(v: &Value) -> Vec<MatchSide> {
+    v["data"]["matches"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let seg = m["segments"].as_array()?.iter().find(|s| s["type"] == "overview")?;
+            let (won, lost) = (stat_u32(&seg["stats"], "roundsWon"), stat_u32(&seg["stats"], "roundsLost"));
+            if won == lost {
+                return None;
+            }
+            Some(MatchSide { match_id: m["attributes"]["id"].as_str()?.to_lowercase(), rounds_won: won, rounds_lost: lost })
+        })
+        .collect()
+}
+
+/// The parties of two or more in a `match_players` response, as lowercase Riot IDs (`name#tag`).
+pub fn parse_match_parties(v: &Value) -> Vec<Vec<String>> {
+    let mut parties: std::collections::HashMap<(&str, &str), Vec<String>> = std::collections::HashMap::new();
+    for s in segments(v).filter(|s| s["type"] == "player-summary") {
+        let (Some(name), Some(team), Some(party)) =
+            (s["attributes"]["platformUserIdentifier"].as_str(), s["metadata"]["teamId"].as_str(), s["metadata"]["partyId"].as_str())
+        else {
+            continue;
+        };
+        parties.entry((team, party)).or_default().push(name.to_lowercase());
+    }
+    parties.into_values().filter(|p| p.len() > 1).collect()
+}
+
 /// The newest `count` matches from `/matches/riot/{id}`.
 pub fn parse_matches(v: &Value, count: usize) -> Vec<RecentMatch> {
     v["data"]["matches"]
@@ -409,6 +467,21 @@ pub(crate) mod tests {
     fn season(act: &str, tier: u32, rr: u32, peak: u32, w: u32, l: u32) -> Value {
         json!({ "type": "season", "attributes": { "seasonId": act, "playlist": "competitive" },
                 "stats": { "rank": rank(tier, rr), "peakRank": rank(peak, 0), "matchesWon": stat(json!(w)), "matchesLost": stat(json!(l)), "matchesTied": stat(json!(1)) } })
+    }
+
+    #[test]
+    fn match_parties_group_teammates_by_party() {
+        let p = |name: &str, team: &str, party: &str| json!({ "type": "player-summary", "attributes": { "platformUserIdentifier": name }, "metadata": { "teamId": team, "partyId": party } });
+        let v = json!({ "data": { "segments": [
+            p("A#1", "Red", "1"), p("b#2", "Red", "1"), p("solo#3", "Red", "2"),
+            // Party ids are only unique within a team.
+            p("x#4", "Blue", "1"), p("y#5", "Blue", "1"), p("z#6", "Blue", "1"),
+            { "type": "round-summary" }
+        ]}});
+        let mut parties = parse_match_parties(&v);
+        parties.iter_mut().for_each(|p| p.sort());
+        parties.sort();
+        assert_eq!(parties, [vec!["a#1", "b#2"], vec!["x#4", "y#5", "z#6"]]);
     }
 
     #[test]
@@ -495,6 +568,12 @@ pub(crate) mod tests {
             json!({ "data": { "matches": [m("m1", "victory"), m("m2", "defeat"), m("m3", "draw"), { "attributes": { "id": "bad" } }] } });
         let all = parse_matches(&v, 5);
         assert_eq!(all.len(), 3, "a match without the player's segment is skipped");
+        let sides = parse_match_sides(&v);
+        assert_eq!(sides.len(), 3);
+        assert_eq!(sides[0], MatchSide { match_id: "m1".into(), rounds_won: 13, rounds_lost: 7 });
+        let mut tie = v.clone();
+        tie["data"]["matches"][0]["segments"][0]["stats"]["roundsLost"] = stat(json!(13.0));
+        assert_eq!(parse_match_sides(&tie).len(), 2, "a tie gives both teams the same entry, so it's left out");
         let first = &all[0];
         assert_eq!((first.won, first.rounds_won, first.rounds_lost, first.map_id.as_str()), (Some(true), 13, 7, "92584fbe"));
         assert_eq!((first.player.kills, first.player.deaths, first.player.assists, first.player.acs()), (24, 13, 7, 352));
@@ -592,7 +671,7 @@ pub(crate) mod tests {
         let t = Tracker::with(transport, Arc::default(), None);
         let Transport::Browser { open, .. } = &t.transport else { unreachable!() };
         let data = format!("{api}/data");
-        assert_eq!(t.transport.get(&data).await.unwrap().status, 200, "the first request opens it");
+        assert_eq!(t.transport.get(&data, None).await.unwrap().status, 200, "the first request opens it");
         let first = open.lock().await.as_ref().unwrap().0.clone();
         t.close_if_idle();
         assert!(open.lock().await.is_some(), "just used");
@@ -602,7 +681,7 @@ pub(crate) mod tests {
         drop(first);
         t.close_if_idle();
         assert!(open.lock().await.is_none(), "idle and unused");
-        assert_eq!(t.transport.get(&data).await.unwrap().status, 200, "the next request opens a new one");
+        assert_eq!(t.transport.get(&data, None).await.unwrap().status, 200, "the next request opens a new one");
         assert!(open.lock().await.is_some());
     }
 
