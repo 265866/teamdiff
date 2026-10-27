@@ -8,15 +8,17 @@ mod ui;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use model::Model;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const HELP: &str = "teamdiff: a terminal tracker for your VALORANT matches
 
 USAGE:
-    teamdiff
+    teamdiff [--dump <dir>]
 
 OPTIONS:
+    --dump <dir>   Save every raw API response under <dir> (for checking field names)
     -h, --help     Show this help
 
 KEYS:
@@ -29,20 +31,29 @@ associated properties are trademarks or registered trademarks of Riot Games, Inc
 teamdiff was created under Riot Games' \"Legal Jibber Jabber\" policy using assets owned by Riot Games.
 Riot Games does not endorse or sponsor this project.";
 
-/// `Ok(false)` when the help was asked for.
-fn parse_args() -> Result<bool, String> {
-    match std::env::args().nth(1).as_deref() {
-        None => Ok(true),
-        Some("-h" | "--help") => Ok(false),
-        Some(other) => Err(format!("unknown argument {other:?}")),
+struct Options {
+    dump: Option<PathBuf>,
+}
+
+fn parse_args() -> Result<Option<Options>, String> {
+    let mut args = std::env::args().skip(1).peekable();
+    let mut options = Options { dump: None };
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "-h" | "--help" => return Ok(None),
+            // A flag after --dump is a flag, not a directory to fill with live responses.
+            "--dump" => options.dump = Some(args.next_if(|a| !a.starts_with('-')).ok_or("--dump needs a directory")?.into()),
+            other => return Err(format!("unknown argument {other:?}")),
+        }
     }
+    Ok(Some(options))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    match parse_args() {
-        Ok(true) => {}
-        Ok(false) => {
+    let options = match parse_args() {
+        Ok(Some(o)) => o,
+        Ok(None) => {
             println!("{HELP}");
             return Ok(());
         }
@@ -50,9 +61,9 @@ async fn main() -> Result<()> {
             eprintln!("{e}\n\n{HELP}");
             std::process::exit(2);
         }
-    }
+    };
     let shared = Arc::new(Mutex::new(Model::new()));
-    tokio::spawn(controller::run(shared.clone()));
+    tokio::spawn(controller::run(shared.clone(), options.dump));
     run_ui(shared)
 }
 

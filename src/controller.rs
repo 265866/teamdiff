@@ -4,6 +4,7 @@ use crate::model::{Model, Phase};
 use crate::riot::{Riot, connect};
 use anyhow::Result;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -42,9 +43,9 @@ async fn release_after(claims: Claims, ids: Vec<String>, delay: Duration) {
 
 /// Runs forever: connects to the Riot Client, follows the game, and reconnects when the client goes
 /// away.
-pub async fn run(shared: Shared) {
+pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
     loop {
-        let riot = match connect().await {
+        let riot = match connect(dump_dir.clone()).await {
             Ok(r) => Arc::new(r),
             Err(e) => {
                 lock(&shared).phase = Phase::Waiting(format!("{e:#}"));

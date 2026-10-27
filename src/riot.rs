@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,11 +45,13 @@ pub struct Riot {
     permits: Semaphore,
     /// When Riot's latest Retry-After ends.
     retry_at: Mutex<Option<Instant>>,
+    dump_dir: Option<PathBuf>,
+    last_presences: Mutex<Option<Value>>,
     pub net: Arc<NetStats>,
 }
 
 /// Connects to the running Riot Client. Fails when the client isn't running or isn't signed in.
-pub async fn connect() -> Result<Riot> {
+pub async fn connect(dump_dir: Option<PathBuf>) -> Result<Riot> {
     let lock_path = lockfile_path().ok_or_else(|| anyhow!("LOCALAPPDATA is not set"))?;
     let lock = parse_lockfile(&std::fs::read_to_string(&lock_path).context("Riot Client is not running")?)?;
     let log_path = game_log_path().ok_or_else(|| anyhow!("LOCALAPPDATA is not set"))?;
@@ -57,6 +60,9 @@ pub async fn connect() -> Result<Riot> {
     let local = reqwest::Client::builder().tls_danger_accept_invalid_certs(true).timeout(Duration::from_secs(5)).build()?;
     let remote = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
     let (tokens, puuid) = fetch_tokens(&local, &lock).await?;
+    if let Some(d) = &dump_dir {
+        std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
+    }
     Ok(Riot {
         local,
         remote,
@@ -66,6 +72,8 @@ pub async fn connect() -> Result<Riot> {
         tokens: tokio::sync::RwLock::new(tokens),
         permits: Semaphore::new(4),
         retry_at: Mutex::default(),
+        dump_dir,
+        last_presences: Mutex::default(),
         net: Arc::default(),
     })
 }
@@ -100,6 +108,13 @@ impl Riot {
         if !status.is_success() {
             bail!("presences returned {status}");
         }
+        if self.dump_dir.is_some() {
+            let mut last = self.last_presences.lock().unwrap_or_else(|e| e.into_inner());
+            if last.as_ref() != Some(&v) {
+                dump(self.dump_dir.as_deref(), "presences", &v);
+                *last = Some(v.clone());
+            }
+        }
         Ok(parse_presences(&v))
     }
 
@@ -110,6 +125,9 @@ impl Riot {
         self.net.started.fetch_add(1, Ordering::Relaxed);
         let result = self.send_with_retry(method, &url, body).await;
         self.net.finished.fetch_add(1, Ordering::Relaxed);
+        if let Ok(Some(v)) = &result {
+            dump(self.dump_dir.as_deref(), path, v);
+        }
         result
     }
 
@@ -211,6 +229,14 @@ fn retry_wait(retry_after: Option<&str>) -> Duration {
     const MAX_RETRY_AFTER: u64 = 86_400;
     let secs = retry_after.and_then(|s| s.trim().parse::<u64>().ok()).map(|s| s.min(MAX_RETRY_AFTER));
     Duration::from_secs(secs.unwrap_or(5))
+}
+
+/// With `--dump`, saves a raw response under the dump directory for checking field names.
+pub fn dump(dir: Option<&Path>, label: &str, v: &Value) {
+    let Some(dir) = dir else { return };
+    let name: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    let stamp = chrono::Utc::now().format("%H%M%S%3f");
+    let _ = std::fs::write(dir.join(format!("{stamp}_{}.json", name.trim_matches('_'))), serde_json::to_vec_pretty(v).unwrap_or_default());
 }
 
 #[cfg(test)]
