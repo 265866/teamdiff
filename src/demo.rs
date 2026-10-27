@@ -3,7 +3,8 @@
 use crate::content::Content;
 use crate::model::{Load, Lobby, Model, Phase, Pick, PlayerData, Side, Slot};
 use crate::presence::{LoopState, Presence};
-use crate::tracker::Profile;
+use crate::stats::Record;
+use crate::tracker::{ActStats, Profile};
 use chrono::{Duration as Days, Utc};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -58,8 +59,8 @@ struct P {
     tier: u32,
     rr: u32,
     peak: u32,
-    /// The latest act played; unranked until a game this act.
-    this_act: bool,
+    act: (u32, u32, &'static str),
+    map: (u32, u32),
     party: Option<&'static str>,
 }
 
@@ -68,24 +69,32 @@ fn roster() -> Vec<P> {
     use Pick::{Hover, Locked};
     use Side::*;
     vec![
-        P { id: "me", name: "Alpha", tag: "DEMO", agent: "jett", side: Ally, pick: Locked, incognito: false, level: Some(214), tier: 19, rr: 47, peak: 21, this_act: true, party: Some("x") },
-        P { id: "sova", name: "Bravo", tag: "DEMO", agent: "sova", side: Ally, pick: Hover, incognito: false, level: Some(156), tier: 18, rr: 12, peak: 20, this_act: true, party: Some("x") },
-        P { id: "killjoy", name: "Charlie", tag: "DEMO", agent: "killjoy", side: Ally, pick: Pick::None, incognito: false, level: None, tier: 17, rr: 88, peak: 18, this_act: false, party: None },
-        P { id: "omen", name: "hidden", tag: "", agent: "omen", side: Ally, pick: Pick::None, incognito: true, level: Some(87), tier: 19, rr: 3, peak: 19, this_act: true, party: None },
-        P { id: "sage", name: "Delta", tag: "DEMO", agent: "sage", side: Ally, pick: Hover, incognito: false, level: Some(31), tier: 0, rr: 0, peak: 14, this_act: false, party: None },
-        P { id: "raze", name: "Echo", tag: "DEMO", agent: "raze", side: Enemy, pick: Locked, incognito: false, level: Some(302), tier: 21, rr: 34, peak: 22, this_act: true, party: Some("y") },
-        P { id: "breach", name: "Foxtrot", tag: "DEMO", agent: "breach", side: Enemy, pick: Locked, incognito: false, level: Some(190), tier: 20, rr: 70, peak: 21, this_act: true, party: Some("y") },
-        P { id: "clove", name: "Golf", tag: "DEMO", agent: "clove", side: Enemy, pick: Locked, incognito: false, level: Some(121), tier: 19, rr: 55, peak: 20, this_act: true, party: Some("z") },
-        P { id: "cypher", name: "hidden", tag: "", agent: "cypher", side: Enemy, pick: Locked, incognito: true, level: None, tier: 18, rr: 90, peak: 19, this_act: true, party: Some("z") },
-        P { id: "neon", name: "Hotel", tag: "DEMO", agent: "neon", side: Enemy, pick: Locked, incognito: false, level: Some(245), tier: 16, rr: 21, peak: 19, this_act: false, party: None },
+        P { id: "me", name: "Alpha", tag: "DEMO", agent: "jett", side: Ally, pick: Locked, incognito: false, level: Some(214), tier: 19, rr: 47, peak: 21, act: (34, 28, "a6"), map: (7, 5), party: Some("x") },
+        P { id: "sova", name: "Bravo", tag: "DEMO", agent: "sova", side: Ally, pick: Hover, incognito: false, level: Some(156), tier: 18, rr: 12, peak: 20, act: (36, 34, "a6"), map: (7, 8), party: Some("x") },
+        P { id: "killjoy", name: "Charlie", tag: "DEMO", agent: "killjoy", side: Ally, pick: Pick::None, incognito: false, level: None, tier: 17, rr: 88, peak: 18, act: (65, 68, "a5"), map: (2, 2), party: None },
+        P { id: "omen", name: "hidden", tag: "", agent: "omen", side: Ally, pick: Pick::None, incognito: true, level: Some(87), tier: 19, rr: 3, peak: 19, act: (15, 10, "a6"), map: (4, 2), party: None },
+        P { id: "sage", name: "Delta", tag: "DEMO", agent: "sage", side: Ally, pick: Hover, incognito: false, level: Some(31), tier: 0, rr: 0, peak: 14, act: (14, 13, "a1"), map: (0, 0), party: None },
+        P { id: "raze", name: "Echo", tag: "DEMO", agent: "raze", side: Enemy, pick: Locked, incognito: false, level: Some(302), tier: 21, rr: 34, peak: 22, act: (49, 39, "a6"), map: (11, 7), party: Some("y") },
+        P { id: "breach", name: "Foxtrot", tag: "DEMO", agent: "breach", side: Enemy, pick: Locked, incognito: false, level: Some(190), tier: 20, rr: 70, peak: 21, act: (52, 52, "a6"), map: (4, 5), party: Some("y") },
+        P { id: "clove", name: "Golf", tag: "DEMO", agent: "clove", side: Enemy, pick: Locked, incognito: false, level: Some(121), tier: 19, rr: 55, peak: 20, act: (20, 21, "a6"), map: (3, 5), party: Some("z") },
+        P { id: "cypher", name: "hidden", tag: "", agent: "cypher", side: Enemy, pick: Locked, incognito: true, level: None, tier: 18, rr: 90, peak: 19, act: (15, 18, "a6"), map: (3, 3), party: Some("z") },
+        P { id: "neon", name: "Hotel", tag: "DEMO", agent: "neon", side: Enemy, pick: Locked, incognito: false, level: Some(245), tier: 16, rr: 21, peak: 19, act: (51, 46, "a5"), map: (6, 5), party: None },
     ]
 }
 
 fn player_data(p: &P) -> PlayerData {
-    let this_act = p.this_act;
+    // Like tracker.gg: the latest act played, and unranked until a game this act.
+    let acts = vec![ActStats { act_id: p.act.2.into(), tier: p.tier, record: Record { wins: p.act.0, losses: p.act.1 } }];
+    let this_act = p.act.2 == "a6";
+    let maps = [("Ascent", p.map.0, p.map.1), ("Bind", 1, 0), ("Haven", 0, 1), ("Lotus", 1, 0)]
+        .into_iter()
+        .filter(|(_, w, l)| w + l > 0)
+        .map(|(name, wins, losses)| (name.to_string(), Record { wins, losses }))
+        .collect();
     PlayerData {
         name: (!p.incognito).then(|| (p.name.to_string(), p.tag.to_string())),
-        profile: Load::Ready(Profile { tier: if this_act { p.tier } else { 0 }, rr: this_act.then_some(p.rr), peak_tier: p.peak }),
+        profile: Load::Ready(Profile { tier: if this_act { p.tier } else { 0 }, rr: this_act.then_some(p.rr), peak_tier: p.peak, acts }),
+        maps: Load::Ready(maps),
     }
 }
 
@@ -201,8 +210,11 @@ mod tests {
         assert!(!s.contains("Echo"));
         assert!(s.contains("Player"), "incognito teammate who hasn't picked shows as Player");
         assert!(!s.contains("hidden"), "incognito names are never drawn");
+        assert!(s.contains("WIN% ON ASCENT"));
+        assert!(s.contains("55% 34-28"));
+        assert!(s.contains("49% 65-68 prev"));
         let sage = s.lines().find(|l| l.contains("Delta")).unwrap();
-        assert!(sage.contains("Unranked"), "no game this act yet: {sage}");
+        assert!(!sage.contains("14-13"), "a record older than last act isn't shown as this act's: {sage}");
     }
 
     #[test]
@@ -225,7 +237,7 @@ mod tests {
     fn private_tracker_profiles_say_so() {
         let mut m = model("in-game");
         let neon = m.players.get_mut("neon").unwrap();
-        neon.profile = Load::Private;
+        (neon.profile, neon.maps) = (Load::Private, Load::Private);
         let s = render(&m, WIDTH, 50);
         let row = s.iter().find(|l| l.contains("Hotel")).unwrap();
         assert!(row.contains("private") && !row.contains('%') && !row.contains("···"), "{row}");

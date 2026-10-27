@@ -5,6 +5,7 @@
 
 use crate::browser::{Browser, HOME, Response};
 use crate::riot::{NetStats, dump};
+use crate::stats::{ActRecord, Record, RecordSource};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -225,6 +226,10 @@ impl Tracker {
     pub async fn profile(&self, riot_id: &str) -> Result<Option<Value>> {
         self.get(&format!("/profile/riot/{riot_id}?")).await
     }
+
+    pub async fn maps(&self, riot_id: &str, act_id: &str) -> Result<Option<Value>> {
+        self.get(&format!("/profile/riot/{riot_id}/segments/map?playlist=competitive&seasonId={act_id}&source=web")).await
+    }
 }
 
 /// `name#tag` as it appears in tracker.gg's URLs: every byte outside the unreserved set is
@@ -239,6 +244,14 @@ pub fn riot_id_path(name: &str, tag: &str) -> String {
         .collect()
 }
 
+/// A player's competitive record and rank in one act.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActStats {
+    pub act_id: String,
+    pub tier: u32,
+    pub record: Record,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Profile {
     /// Current rank; tier 0 is unranked.
@@ -246,6 +259,19 @@ pub struct Profile {
     /// Ranked rating within the tier, when tracker.gg shows it; it often doesn't.
     pub rr: Option<u32>,
     pub peak_tier: u32,
+    /// The latest act the player has played.
+    pub acts: Vec<ActStats>,
+}
+
+impl Profile {
+    /// This act's record, else last act's.
+    pub fn act_record(&self, current: &str, previous: Option<&str>) -> Option<ActRecord> {
+        let played = |id: &str| self.acts.iter().find(|a| a.act_id == id).filter(|a| a.record.games() > 0).map(|a| a.record);
+        if let Some(record) = played(current) {
+            return Some(ActRecord { record, source: RecordSource::ThisAct });
+        }
+        previous.and_then(played).map(|record| ActRecord { record, source: RecordSource::PreviousAct })
+    }
 }
 
 /// The tier in one of tracker.gg's rank icon URLs (`.../tiersv2/24.png`), which use today's numbering.
@@ -258,18 +284,54 @@ fn tier_from_icon(stat: &Value) -> u32 {
         .unwrap_or(0)
 }
 
-/// Rank and peak from `/profile/riot/{id}`. Its season entry is the latest act the player has played,
-/// which isn't the current one until they play a game in it; until then they're unranked.
+fn stat_u32(stats: &Value, key: &str) -> u32 {
+    stats[key]["value"].as_f64().map(|v| v.max(0.0).round() as u32).unwrap_or(0)
+}
+
+fn record(stats: &Value) -> Record {
+    Record { wins: stat_u32(stats, "matchesWon"), losses: stat_u32(stats, "matchesLost") }
+}
+
+/// Segments from either response shape: `{ segments: [...] }` (profile) or a bare list (segment endpoints).
+fn segments(v: &Value) -> impl Iterator<Item = &Value> {
+    let data = &v["data"];
+    data.as_array().or_else(|| data["segments"].as_array()).into_iter().flatten()
+}
+
+/// Rank, peak and latest act from `/profile/riot/{id}`. Its season entry is the latest act the player
+/// has played, which isn't the current one until they play a game in it; until then they're unranked.
 pub fn parse_profile(v: &Value, current_act: &str) -> Profile {
-    let segments = v["data"]["segments"].as_array().into_iter().flatten();
-    let Some(season) = segments.into_iter().find(|s| s["type"] == "season") else { return Profile::default() };
+    let Some(season) = segments(v).find(|s| s["type"] == "season") else { return Profile::default() };
     let stats = &season["stats"];
-    let current = season["attributes"]["seasonId"].as_str().is_some_and(|a| a.eq_ignore_ascii_case(current_act));
+    let act = parse_season(v);
+    let current = act.as_ref().is_some_and(|a| a.act_id.eq_ignore_ascii_case(current_act));
     Profile {
         tier: if current { tier_from_icon(&stats["rank"]) } else { 0 },
         rr: if current { stats["rank"]["value"].as_f64().map(|v| v.max(0.0).round() as u32) } else { None },
         peak_tier: tier_from_icon(&stats["peakRank"]),
+        acts: act.into_iter().collect(),
     }
+}
+
+/// One act's rank and record from a response's season entry (`/segments/season?seasonId=...`).
+pub fn parse_season(v: &Value) -> Option<ActStats> {
+    let s = segments(v).find(|s| s["type"] == "season")?;
+    Some(ActStats {
+        act_id: s["attributes"]["seasonId"].as_str()?.to_lowercase(),
+        tier: tier_from_icon(&s["stats"]["rank"]),
+        record: record(&s["stats"]),
+    })
+}
+
+/// Wins and losses per map (by display name) from `/segments/map`, most played first.
+pub fn parse_maps(v: &Value) -> Vec<(String, Record)> {
+    let mut maps: Vec<(String, Record)> = segments(v)
+        .filter(|s| s["type"] == "map")
+        .filter_map(|s| Some((s["metadata"]["name"].as_str()?.to_string(), record(&s["stats"]))))
+        .filter(|(_, r)| r.games() > 0)
+        .collect();
+    maps.sort_by(|(a, ra), (b, rb)| rb.games().cmp(&ra.games()).then_with(|| a.cmp(b)));
+    maps
 }
 
 #[cfg(test)]
@@ -277,13 +339,17 @@ pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
+    fn stat(v: Value) -> Value {
+        json!({ "value": v, "metadata": {} })
+    }
+
     fn rank(tier: u32, rr: u32) -> Value {
         json!({ "value": rr, "metadata": { "iconUrl": format!("https://trackercdn.com/cdn/tracker.gg/valorant/icons/tiersv2/{tier}.png") } })
     }
 
-    fn season(act: &str, tier: u32, rr: u32, peak: u32) -> Value {
+    fn season(act: &str, tier: u32, rr: u32, peak: u32, w: u32, l: u32) -> Value {
         json!({ "type": "season", "attributes": { "seasonId": act, "playlist": "competitive" },
-                "stats": { "rank": rank(tier, rr), "peakRank": rank(peak, 0) } })
+                "stats": { "rank": rank(tier, rr), "peakRank": rank(peak, 0), "matchesWon": stat(json!(w)), "matchesLost": stat(json!(l)), "matchesTied": stat(json!(1)) } })
     }
 
     #[test]
@@ -297,21 +363,50 @@ pub(crate) mod tests {
     fn profile_reads_the_current_act() {
         let v = json!({ "data": { "segments": [
             { "type": "agent", "attributes": { "seasonId": "A6" }, "stats": {} },
-            season("A6", 24, 23, 25)
+            season("A6", 24, 23, 25, 29, 7)
         ]}});
         let p = parse_profile(&v, "a6");
         assert_eq!((p.tier, p.rr, p.peak_tier), (24, Some(23), 25));
         let mut hidden = v.clone();
         hidden["data"]["segments"][1]["stats"]["rank"]["value"] = Value::Null;
         assert_eq!(parse_profile(&hidden, "a6").rr, None, "tracker.gg often leaves RR out; it isn't 0");
+        assert_eq!(
+            p.acts,
+            [ActStats { act_id: "a6".into(), tier: 24, record: Record { wins: 29, losses: 7 } }],
+            "ties don't count as losses"
+        );
+        assert_eq!(
+            p.act_record("a6", Some("a5")),
+            Some(ActRecord { record: Record { wins: 29, losses: 7 }, source: RecordSource::ThisAct })
+        );
     }
 
     #[test]
-    fn no_games_this_act_is_unranked_but_keeps_peak() {
-        let v = json!({ "data": { "segments": [season("a5", 20, 50, 21)] } });
+    fn no_games_this_act_is_unranked_but_keeps_peak_and_last_act() {
+        let v = json!({ "data": { "segments": [season("a5", 20, 50, 21, 65, 68)] } });
         let p = parse_profile(&v, "a6");
         assert_eq!((p.tier, p.rr, p.peak_tier), (0, None, 21));
+        let r = p.act_record("a6", Some("a5")).unwrap();
+        assert_eq!((r.record, r.source), (Record { wins: 65, losses: 68 }, RecordSource::PreviousAct));
+        assert_eq!(p.act_record("a6", Some("a4")), None, "an act older than the last one isn't this act's record");
         assert_eq!(parse_profile(&json!({ "data": { "segments": [] } }), "a6"), Profile::default());
+    }
+
+    #[test]
+    fn season_endpoint_reads_its_season_entry() {
+        let a = parse_season(&json!({ "data": [{ "type": "weapon" }, season("A4", 17, 0, 18, 30, 27)] })).unwrap();
+        assert_eq!(a, ActStats { act_id: "a4".into(), tier: 17, record: Record { wins: 30, losses: 27 } });
+        assert_eq!(parse_season(&json!({ "data": [{ "type": "weapon" }] })), None, "an unplayed act has no season entry");
+    }
+
+    #[test]
+    fn maps_skip_unplayed_and_sort_by_games() {
+        let map = |name: &str, w: u32, l: u32| json!({ "type": "map", "metadata": { "name": name }, "stats": { "matchesWon": stat(json!(w)), "matchesLost": stat(json!(l)) } });
+        let v = json!({ "data": [map("Bind", 5, 2), map("Abyss", 4, 1), { "type": "map-top-agent", "metadata": { "name": "Jett" }, "stats": {} }, map("Pearl", 0, 0), map("Ascent", 3, 4)] });
+        let maps = parse_maps(&v);
+        let names: Vec<_> = maps.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["Ascent", "Bind", "Abyss"]);
+        assert_eq!(maps[1].1, Record { wins: 5, losses: 2 });
     }
 
     pub(crate) fn answer(status: u16, retry_after: Option<&str>, body: &str) -> Response {

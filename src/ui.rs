@@ -1,8 +1,9 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
 use crate::content::Content;
-use crate::model::{Load, Model, Phase, Pick, Side, Slot};
+use crate::model::{Load, Lobby, Model, Phase, Pick, Side, Slot};
 use crate::riot::NetStats;
+use crate::stats::{Record, RecordSource};
 use chrono::Utc;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -76,6 +77,16 @@ fn tier_seg(content: &Content, tier: u32) -> Seg {
     let name = content.tier_name(tier);
     let style = rank_style(&name);
     s(name, style)
+}
+
+fn pct_style(p: u32) -> Style {
+    if p >= 55 {
+        good()
+    } else if p <= 45 {
+        bad()
+    } else {
+        text()
+    }
 }
 
 // ---------- text grid ----------
@@ -236,8 +247,22 @@ fn rank_segs(content: &Content, tier: u32, rr: Option<u32>) -> Vec<Seg> {
     segs
 }
 
+fn record_segs(r: Record, dim_all: bool) -> Vec<Seg> {
+    let Some(p) = r.pct() else { return vec![s("  —", dim())] };
+    vec![s(format!("{p:>3}%"), if dim_all { dim() } else { pct_style(p) }), s(format!(" {}-{}", r.wins, r.losses), dim())]
+}
+
+/// The current act's id and the one before it.
+fn act_ids(m: &Model) -> (Option<String>, Option<String>) {
+    let current = m.content.current_act(Utc::now());
+    let previous = current.and_then(|a| m.content.previous_act(&a.id)).map(|a| a.id.clone());
+    (current.map(|a| a.id.clone()), previous)
+}
+
 // ---------- lobby ----------
-fn lobby_cols() -> Vec<Col> {
+fn lobby_cols(map: &str) -> Vec<Col> {
+    let upper = map.to_uppercase();
+    let map_title = if upper.len() + 8 <= 14 { format!("WIN% ON {upper}") } else { format!("{upper} WIN%") };
     vec![
         col("", 1, false),
         col("AGENT", 11, false),
@@ -245,10 +270,12 @@ fn lobby_cols() -> Vec<Col> {
         col("LVL", 4, true),
         col("RANK", 16, false),
         col("PEAK", 11, false),
+        col("WIN% THIS ACT", 15, false),
+        col(&map_title, 14, false),
     ]
 }
 
-fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMap<String, Seg>) -> Row {
+fn lobby_row(m: &Model, lobby: &Lobby, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMap<String, Seg>) -> Row {
     let content = &m.content;
     let party_cell = match party.get(&slot.puuid) {
         Some(mark) => vec![mark.clone()],
@@ -270,19 +297,41 @@ fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], pregame: bool, party: &HashMa
     let data = m.players.get(&slot.puuid);
     let loading = || vec![s(LOADING, dim())];
     let dash = || vec![s("—", dim())];
+    let no_record = || vec![s("  —", dim())];
     // Incognito players are never looked up, so they have no stats.
     let hidden = slot.incognito && slot.puuid != m.me;
-    let (rank, peak) = match data.map(|d| &d.profile) {
-        _ if hidden => (vec![s("incognito", dim())], dash()),
-        None | Some(Load::Loading) => (loading(), loading()),
-        Some(Load::Missing) => (vec![s("not found", dim())], dash()),
-        Some(Load::Private) => (vec![s("private", dim())], dash()),
+    let (current, previous) = act_ids(m);
+    let (rank, peak, act) = match data.map(|d| &d.profile) {
+        _ if hidden => (vec![s("incognito", dim())], dash(), no_record()),
+        None | Some(Load::Loading) => (loading(), loading(), loading()),
+        Some(Load::Missing) => (vec![s("not found", dim())], dash(), no_record()),
+        Some(Load::Private) => (vec![s("private", dim())], dash(), no_record()),
         Some(Load::Ready(p)) => {
             let peak = if p.peak_tier == 0 { dash() } else { vec![tier_seg(content, p.peak_tier)] };
-            (rank_segs(content, p.tier, p.rr), peak)
+            let act = match current.as_deref().and_then(|c| p.act_record(c, previous.as_deref())) {
+                None => no_record(),
+                Some(a) => {
+                    let mut v = record_segs(a.record, false);
+                    if a.source == RecordSource::PreviousAct {
+                        v.push(s(" prev", dim().add_modifier(Modifier::ITALIC)));
+                    }
+                    v
+                }
+            };
+            (rank_segs(content, p.tier, p.rr), peak, act)
         }
     };
-    join(cols, vec![party_cell, agent, name, lvl, rank, peak])
+    let map = match data.map(|d| &d.maps) {
+        _ if hidden => no_record(),
+        None | Some(Load::Loading) => loading(),
+        Some(Load::Missing | Load::Private) => no_record(),
+        Some(Load::Ready(maps)) => {
+            let name = content.map(&lobby.map_url);
+            let r = maps.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, r)| *r).unwrap_or_default();
+            if r.games() == 0 { no_record() } else { record_segs(r, r.games() < 5) }
+        }
+    };
+    join(cols, vec![party_cell, agent, name, lvl, rank, peak, act, map])
 }
 
 fn lobby_screen(m: &Model, pregame: bool) -> Screen {
@@ -314,7 +363,7 @@ fn lobby_screen(m: &Model, pregame: bool) -> Screen {
             blank(),
         ]),
         Some(l) => {
-            let cols = lobby_cols();
+            let cols = lobby_cols(&map);
             let party = party_marks(&m.parties());
             for (side, label, style) in [(Side::Ally, "YOUR TEAM", ally()), (Side::Enemy, "ENEMY TEAM", enemy())] {
                 let slots: Vec<&Slot> = l.slots.iter().filter(|s| s.side == side).collect();
@@ -329,7 +378,7 @@ fn lobby_screen(m: &Model, pregame: bool) -> Screen {
                     rows.push(header(&cols));
                 }
                 for slot in slots {
-                    rows.push(lobby_row(m, slot, &cols, pregame, &party));
+                    rows.push(lobby_row(m, l, slot, &cols, pregame, &party));
                 }
             }
         }
@@ -376,6 +425,15 @@ fn menus_screen(m: &Model) -> Screen {
                 r.extend([s("      Peak  ", dim()), tier_seg(content, profile.peak_tier)]);
             }
             rows.push(r.into());
+            let mut a = vec![s("   This act   ", dim())];
+            match act_ids(m).0.and_then(|c| profile.act_record(&c, None)) {
+                Some(ar) => {
+                    let p = ar.record.pct().unwrap_or(0);
+                    a.extend([s(format!("{}-{}", ar.record.wins, ar.record.losses), bold()), s(format!("  {p}%"), pct_style(p))]);
+                }
+                None => a.push(s("no games yet", dim())),
+            }
+            rows.push(a.into());
         }
         Some(Load::Missing) => rows.push(vec![s("   Rank       ", dim()), s("not found on tracker.gg", dim())].into()),
         Some(Load::Private) => rows.push(
@@ -513,6 +571,12 @@ pub mod tests {
         assert!(t.iter().map(|x| x.content.to_string()).collect::<String>().ends_with('…'));
         let wide = fit(vec![s("한국어이름", Style::new())], 6, false);
         assert_eq!(width(&wide), 6, "double-width characters are measured by cells");
+    }
+
+    #[test]
+    fn map_header_falls_back_for_long_names() {
+        assert_eq!(lobby_cols("Ascent")[7].title, "WIN% ON ASCENT");
+        assert_eq!(lobby_cols("Corrode")[7].title, "CORRODE WIN%");
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod local_files;
 mod model;
 mod presence;
 mod riot;
+mod stats;
 mod tracker;
 mod ui;
 

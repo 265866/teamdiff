@@ -82,6 +82,12 @@ impl Content {
     pub fn current_act(&self, now: DateTime<Utc>) -> Option<&Act> {
         self.acts.iter().find(|a| a.start <= now && now < a.end)
     }
+
+    /// The act before `id`, by start time.
+    pub fn previous_act(&self, id: &str) -> Option<&Act> {
+        let i = self.acts.iter().position(|a| a.id == id.to_lowercase())?;
+        i.checked_sub(1).map(|j| &self.acts[j])
+    }
 }
 
 fn title_case(s: &str) -> String {
@@ -140,5 +146,7 @@ pub mod tests {
         assert_eq!(ids, ["old", "a5", "a6"]);
         let now: DateTime<Utc> = "2026-10-17T00:00:00Z".parse().unwrap();
         assert_eq!(c.current_act(now).unwrap().id, "a6");
+        assert_eq!(c.previous_act("a6").unwrap().id, "a5");
+        assert!(c.previous_act("old").is_none());
     }
 }

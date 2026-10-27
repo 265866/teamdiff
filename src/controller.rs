@@ -276,14 +276,19 @@ fn update(shared: &Shared, puuid: &str, f: impl FnOnce(&mut PlayerData)) {
     f(lock(shared).players.entry(puuid.to_string()).or_default());
 }
 
-/// Rank and peak rank for one player from tracker.gg. A player
+/// Rank, act record and map records for one player from tracker.gg. A player
 /// tracker.gg doesn't know, or whose profile is private, is shown as such and not asked about again;
 /// any other failure is returned so the load is retried.
 async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &str, act: &str) -> Result<()> {
     fn state<T>(private: bool) -> Load<T> {
         if private { Load::Private } else { Load::Missing }
     }
-    let unavailable = |private: bool| update(shared, puuid, |d| d.profile = state(private));
+    let unavailable = |private: bool| {
+        update(shared, puuid, |d| {
+            d.profile = state(private);
+            d.maps = state(private);
+        })
+    };
     let v = match tracker.profile(riot_id).await {
         Ok(Some(v)) => v,
         Ok(None) => {
@@ -304,8 +309,24 @@ async fn load_player(tracker: &Tracker, shared: &Shared, puuid: &str, riot_id: &
         return Ok(());
     }
     let profile = tracker::parse_profile(&v, act);
+    drop(v);
+    // Without a game this act there are no map records to ask for.
+    let played = profile.acts.iter().any(|a| a.act_id == act);
     update(shared, puuid, |d| d.profile = Load::Ready(profile));
+    let maps = if played { tracker.maps(riot_id, act).await } else { Ok(None) };
+    let maps = private_or(maps)?.map(|v| v.map(|v| tracker::parse_maps(&v)).unwrap_or_default());
+    update(shared, puuid, |d| d.maps = maps);
     Ok(())
+}
+
+/// A tracker.gg answer, with a private refusal as `Load::Private` rather than an error: it isn't
+/// shown as a failure or asked again.
+fn private_or<T>(result: Result<T>) -> Result<Load<T>> {
+    match result {
+        Ok(v) => Ok(Load::Ready(v)),
+        Err(e) if e.is::<tracker::Private>() => Ok(Load::Private),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -322,7 +343,7 @@ mod tests {
     }
 
     fn profile_body(privacy: &str) -> String {
-        let season = r#"{"type":"season","attributes":{"seasonId":"a6"},"stats":{"rank":{"value":null,"metadata":{"iconUrl":"https://x/tiersv2/14.png"}}}}"#;
+        let season = r#"{"type":"season","attributes":{"seasonId":"a6"},"stats":{"rank":{"value":null,"metadata":{"iconUrl":"https://x/tiersv2/14.png"}},"matchesWon":{"value":3},"matchesLost":{"value":2}}}"#;
         // As seen live, a "premier" profile carries no stats.
         let segments = if privacy == "public" { season } else { "" };
         format!(r#"{{"data":{{"metadata":{{"privacy":"{privacy}"}},"segments":[{segments}]}}}}"#)
@@ -339,6 +360,7 @@ mod tests {
         let d = &m.players["p"];
         // The canned tracker panics on a second request, so nothing else was asked for.
         assert_eq!(d.profile, Load::Private);
+        assert_eq!(d.maps.clone().map(|_| ()), Load::Private);
     }
 
     #[tokio::test]
@@ -346,9 +368,21 @@ mod tests {
         let answer = crate::tracker::tests::answer;
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
         let body = profile_body("public").replace(r#""privacy":"public""#, r#""privacy":"premier""#);
-        let tracker = Tracker::canned(vec![answer(200, None, &body)]);
+        let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, "")]);
         load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
         assert!(matches!(&lock(&shared).players["p"].profile, Load::Ready(p) if p.tier == 14));
+    }
+
+    #[tokio::test]
+    async fn private_maps_are_private_not_a_failure() {
+        let answer = crate::tracker::tests::answer;
+        let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
+        let tracker = Tracker::canned(vec![answer(200, None, &profile_body("public")), answer(451, None, "")]);
+        load_player(&tracker, &shared, "p", "a%23b", "a6").await.unwrap();
+        let m = lock(&shared);
+        let d = &m.players["p"];
+        assert!(matches!(&d.profile, Load::Ready(p) if p.tier == 14));
+        assert_eq!(d.maps.clone().map(|_| ()), Load::Private);
     }
 
     /// tracker.gg's `platformUserId` is its own id, never the Riot puuid the lobby uses.
@@ -356,10 +390,10 @@ mod tests {
     async fn a_profile_loads_though_tracker_gg_ids_the_player_differently() {
         let act = "a6";
         let body = format!(
-            r#"{{"data":{{"platformInfo":{{"platformUserId":"tracker-gg-own-id"}},"segments":[{{"type":"season","attributes":{{"seasonId":"{act}"}},"stats":{{"rank":{{"value":40,"metadata":{{"iconUrl":"https://x/tiersv2/14.png"}}}}}}}}]}}}}"#
+            r#"{{"data":{{"platformInfo":{{"platformUserId":"tracker-gg-own-id"}},"segments":[{{"type":"season","attributes":{{"seasonId":"{act}"}},"stats":{{"rank":{{"value":40,"metadata":{{"iconUrl":"https://x/tiersv2/14.png"}}}},"matchesWon":{{"value":3}},"matchesLost":{{"value":2}}}}}}]}}}}"#
         );
         let answer = crate::tracker::tests::answer;
-        let tracker = Tracker::canned(vec![answer(200, None, &body)]);
+        let tracker = Tracker::canned(vec![answer(200, None, &body), answer(404, None, "")]);
         let shared: Shared = Arc::new(Mutex::new(Model::new(Arc::default())));
         let riot_puuid = "riot-puuid";
         load_player(&tracker, &shared, riot_puuid, "a%23b", act).await.unwrap();
