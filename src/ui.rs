@@ -1,6 +1,6 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
-use crate::model::{Model, Phase};
+use crate::model::{Model, Phase, Pick, Slot};
 use crate::riot::NetStats;
 use chrono::Utc;
 use ratatui::Frame;
@@ -35,6 +35,9 @@ fn border() -> Style {
 fn bold() -> Style {
     fg(rgb(0xf0, 0xf3, 0xf6)).add_modifier(Modifier::BOLD)
 }
+fn ally() -> Style {
+    fg(rgb(0x4f, 0xd1, 0xc5))
+}
 fn you() -> Style {
     fg(rgb(0xfb, 0xbf, 0x24)).add_modifier(Modifier::BOLD)
 }
@@ -56,6 +59,10 @@ fn s(t: impl Into<String>, style: Style) -> Seg {
     Span::styled(t.into(), style)
 }
 
+fn width(segs: &[Seg]) -> usize {
+    segs.iter().map(|s| s.content.width()).sum()
+}
+
 #[derive(Default, Clone)]
 struct Row {
     segs: Vec<Seg>,
@@ -69,6 +76,65 @@ impl From<Vec<Seg>> for Row {
 
 fn blank() -> Row {
     Row::default()
+}
+
+/// Truncates with an ellipsis or pads to exactly `w` columns.
+fn fit(segs: Vec<Seg>, w: usize, right: bool) -> Vec<Seg> {
+    let n = width(&segs);
+    if n > w {
+        let mut out = Vec::new();
+        let mut left = w.saturating_sub(1);
+        for seg in segs {
+            if left == 0 {
+                break;
+            }
+            let mut t = String::new();
+            for ch in seg.content.chars() {
+                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if cw > left {
+                    left = 0;
+                    break;
+                }
+                t.push(ch);
+                left -= cw;
+            }
+            out.push(Span::styled(t, seg.style));
+        }
+        let used = width(&out);
+        out.push(s("…", dim()));
+        if used + 1 < w {
+            out.push(s(" ".repeat(w - used - 1), Style::new()));
+        }
+        return out;
+    }
+    let pad = s(" ".repeat(w - n), Style::new());
+    if right { std::iter::once(pad).chain(segs).collect() } else { segs.into_iter().chain(std::iter::once(pad)).collect() }
+}
+
+struct Col {
+    title: String,
+    w: usize,
+    right: bool,
+}
+
+fn col(title: &str, w: usize, right: bool) -> Col {
+    Col { title: title.into(), w, right }
+}
+
+/// Joins cells into a row, separated by one space.
+fn join(cols: &[Col], cells: Vec<Vec<Seg>>) -> Row {
+    let mut row = Row::default();
+    for (i, (c, cell)) in cols.iter().zip(cells).enumerate() {
+        if i > 0 {
+            row.segs.push(s(" ", Style::new()));
+        }
+        row.segs.extend(fit(cell, c.w, c.right));
+    }
+    row
+}
+
+fn header(cols: &[Col]) -> Row {
+    join(cols, cols.iter().map(|c| vec![s(c.title.clone(), dim())]).collect())
 }
 
 fn keys(pairs: &[(&str, &str)]) -> Vec<Seg> {
@@ -118,7 +184,14 @@ fn party_marks(parties: &HashMap<String, String>) -> HashMap<String, Seg> {
     parties.iter().map(|(p, id)| (p.clone(), s("■", fg(color[id])))).collect()
 }
 
-fn name_segs(m: &Model, puuid: &str) -> Vec<Seg> {
+fn name_segs(m: &Model, puuid: &str, incognito: bool, agent: Option<&str>) -> Vec<Seg> {
+    // The game hides an incognito player's name from others, never from themselves.
+    if incognito && puuid != m.me {
+        return match agent {
+            Some(a) => vec![s(m.content.agent(a), text().add_modifier(Modifier::ITALIC))],
+            None => vec![s("Player", dim().add_modifier(Modifier::ITALIC))],
+        };
+    }
     let name = m.players.get(puuid).and_then(|d| d.name.clone());
     match (name, puuid == m.me) {
         (Some((n, _)), true) => vec![s(n, you())],
@@ -126,6 +199,63 @@ fn name_segs(m: &Model, puuid: &str) -> Vec<Seg> {
         (Some((n, t)), false) => vec![s(n, text()), s(format!("#{t}"), dim())],
         (None, false) => vec![s(LOADING, dim())],
     }
+}
+
+// ---------- lobby ----------
+fn lobby_cols() -> Vec<Col> {
+    vec![col("", 1, false), col("AGENT", 11, false), col("PLAYER", 18, false), col("LVL", 4, true)]
+}
+
+fn lobby_row(m: &Model, slot: &Slot, cols: &[Col], party: &HashMap<String, Seg>) -> Row {
+    let content = &m.content;
+    let party_cell = match party.get(&slot.puuid) {
+        Some(mark) => vec![mark.clone()],
+        None => vec![s(" ", Style::new())],
+    };
+    let agent_name = slot.agent_id.as_deref().map(|a| content.agent(a));
+    let agent = match (slot.pick, &agent_name) {
+        (Pick::Locked, Some(a)) => vec![s("◆ ", dim()), s(a.clone(), bold())],
+        (Pick::Hover, Some(a)) => vec![s("◇ ", dim()), s(a.clone(), dim().add_modifier(Modifier::ITALIC))],
+        _ => vec![s("  —", dim())],
+    };
+    let shown_agent = if slot.pick == Pick::None { None } else { slot.agent_id.as_deref() };
+    let name = name_segs(m, &slot.puuid, slot.incognito, shown_agent);
+    let lvl = match (slot.hide_level, slot.level) {
+        (false, Some(l)) => vec![s(l.to_string(), text())],
+        _ => vec![s("—", dim())],
+    };
+    join(cols, vec![party_cell, agent, name, lvl])
+}
+
+fn lobby_screen(m: &Model) -> Screen {
+    let lobby = m.lobby.as_ref();
+    let map = lobby.map(|l| m.content.map(&l.map_url)).unwrap_or_default();
+    let queue = lobby.map(|l| queue_name(&l.queue)).unwrap_or_default();
+    let mut right = vec![s(format!("{queue} · {map}"), dim())];
+    if let Some(end) = lobby.and_then(|l| l.phase_ends) {
+        let left = end.saturating_duration_since(Instant::now()).as_secs();
+        right.push(s(" · ", dim()));
+        right.push(s(format!("{}:{:02}", left / 60, left % 60), warn()));
+    }
+    let mut rows = Vec::new();
+    match lobby {
+        None => rows.extend([blank(), vec![s("   Loading match…", dim())].into(), blank()]),
+        Some(l) if !l.is_competitive() => rows.extend([
+            blank(),
+            vec![s(format!("   {} isn't tracked yet — teamdiff only covers competitive matches for now.", queue), dim())].into(),
+            blank(),
+        ]),
+        Some(l) => {
+            let cols = lobby_cols();
+            let party = party_marks(&m.parties());
+            rows.push(vec![s("YOUR TEAM", ally().add_modifier(Modifier::BOLD))].into());
+            rows.push(header(&cols));
+            for slot in &l.slots {
+                rows.push(lobby_row(m, slot, &cols, &party));
+            }
+        }
+    }
+    Screen { title: vec![s("AGENT SELECT", bold())], right, rows, footer: keys(&[("q", "quit")]) }
 }
 
 // ---------- menus / waiting ----------
@@ -146,7 +276,7 @@ fn menus_screen(m: &Model) -> Screen {
     let now = Utc::now();
     let mut rows = vec![blank()];
     let mut line = vec![s("   ", Style::new())];
-    line.extend(name_segs(m, &m.me));
+    line.extend(name_segs(m, &m.me, false, None));
     if let Some(l) = m.my_presence().and_then(|p| p.account_level) {
         line.push(s(format!("   level {l}"), dim()));
     }
@@ -158,7 +288,7 @@ fn menus_screen(m: &Model) -> Screen {
     mates.sort();
     for (i, mate) in mates.iter().enumerate() {
         let mut r = vec![s(if i == 0 { "   Party      " } else { "              " }, dim()), party[*mate].clone(), s(" ", Style::new())];
-        r.extend(name_segs(m, mate));
+        r.extend(name_segs(m, mate, false, None));
         rows.push(r.into());
     }
     let p = m.my_presence();
@@ -202,6 +332,7 @@ fn screen(m: &Model) -> Screen {
     match &m.phase {
         Phase::Waiting(reason) => waiting_screen(reason),
         Phase::Menus => menus_screen(m),
+        Phase::Pregame => lobby_screen(m),
     }
 }
 
@@ -263,8 +394,18 @@ pub mod tests {
     }
 
     #[test]
+    fn fit_pads_and_truncates_by_display_width() {
+        assert_eq!(width(&fit(vec![s("abc", Style::new())], 6, false)), 6);
+        let t = fit(vec![s("Charlie#DEMO-and-more", Style::new())], 10, false);
+        assert_eq!(width(&t), 10);
+        assert!(t.iter().map(|x| x.content.to_string()).collect::<String>().ends_with('…'));
+        let wide = fit(vec![s("한국어이름", Style::new())], 6, false);
+        assert_eq!(width(&wide), 6, "double-width characters are measured by cells");
+    }
+
+    #[test]
     fn request_errors_show_in_the_footer() {
-        let mut m = Model::new();
+        let mut m = Model::new(std::sync::Arc::default());
         let err = "500 Internal Server Error from /name-service/v2/players, with a reason long enough to be cut off".to_string();
         m.last_error = Some((err.clone(), Instant::now()));
         let lines = render(&m, WIDTH, 10);
@@ -277,7 +418,7 @@ pub mod tests {
 
     #[test]
     fn too_small_screen_reports_width() {
-        let m = Model::new();
+        let m = Model::new(std::sync::Arc::default());
         let lines = render(&m, 80, 20);
         assert!(lines.iter().any(|l| l.contains("Terminal too small")));
         assert!(lines.iter().any(|l| l.contains("Widen to 112 columns (now 80)")));

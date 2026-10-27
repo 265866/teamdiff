@@ -98,9 +98,17 @@ async fn fetch_tokens(client: &reqwest::Client, lock: &Lockfile) -> Result<(Toke
     Ok((Tokens { access: s("accessToken")?, entitlement: s("token")? }, s("subject")?))
 }
 
+pub enum Host {
+    Pd,
+    Glz,
+}
+
 impl Riot {
     pub fn pd(&self) -> String {
         format!("https://pd.{}.a.pvp.net", self.log.shard)
+    }
+    pub fn glz(&self) -> String {
+        format!("https://glz-{}-1.{}.a.pvp.net", self.log.region, self.log.shard)
     }
 
     pub async fn presences(&self) -> Result<Vec<Presence>> {
@@ -118,14 +126,26 @@ impl Riot {
         Ok(parse_presences(&v))
     }
 
-    /// A request to the game's player data server. `Ok(None)` means 404.
-    pub async fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
-        let url = format!("{}{path}", self.pd());
+    /// GET on a game server. `Ok(None)` means 404, which several endpoints use for "not in a match yet".
+    pub async fn get(&self, host: Host, path: &str) -> Result<Option<Value>> {
+        self.send(Method::GET, host, path, None).await
+    }
+
+    pub async fn send(&self, method: Method, host: Host, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
+        let base = match host {
+            Host::Pd => self.pd(),
+            Host::Glz => self.glz(),
+        };
+        let url = format!("{base}{path}");
         let _permit = self.permits.acquire().await?;
         self.net.started.fetch_add(1, Ordering::Relaxed);
         let result = self.send_with_retry(method, &url, body).await;
         self.net.finished.fetch_add(1, Ordering::Relaxed);
-        if let Ok(Some(v)) = &result {
+        // Agent select's lobby carries what the game hides, such as the enemy team's lock count and
+        // your starting side, so --dump never saves it.
+        if let Ok(Some(v)) = &result
+            && !path.starts_with("/pregame/v1/matches/")
+        {
             dump(self.dump_dir.as_deref(), path, v);
         }
         result
@@ -181,10 +201,19 @@ impl Riot {
 
     // ---- endpoints ----
 
+    pub async fn pregame_match_id(&self) -> Result<Option<String>> {
+        let v = self.get(Host::Glz, &format!("/pregame/v1/players/{}", self.puuid)).await?;
+        Ok(v.and_then(|v| v["MatchID"].as_str().map(str::to_string)))
+    }
+
+    pub async fn pregame_match(&self, id: &str) -> Result<Option<Value>> {
+        self.get(Host::Glz, &format!("/pregame/v1/matches/{id}")).await
+    }
+
     /// Riot ids for the given players, as (puuid, name, tag).
     pub async fn names(&self, puuids: &[String]) -> Result<Vec<(String, String, String)>> {
         let body = Value::from(puuids.to_vec());
-        let v = self.send(Method::PUT, "/name-service/v2/players", Some(&body)).await?;
+        let v = self.send(Method::PUT, Host::Pd, "/name-service/v2/players", Some(&body)).await?;
         Ok(v.and_then(|v| v.as_array().cloned())
             .unwrap_or_default()
             .iter()
@@ -237,6 +266,18 @@ pub fn dump(dir: Option<&Path>, label: &str, v: &Value) {
     let name: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
     let stamp = chrono::Utc::now().format("%H%M%S%3f");
     let _ = std::fs::write(dir.join(format!("{stamp}_{}.json", name.trim_matches('_'))), serde_json::to_vec_pretty(v).unwrap_or_default());
+}
+
+/// Static content from valorant-api.com (names for agents and maps).
+pub async fn fetch_content() -> Result<crate::content::Content> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let get = |path: &'static str| {
+        let client = client.clone();
+        async move { client.get(format!("https://valorant-api.com/v1/{path}")).send().await?.error_for_status()?.json::<Value>().await }
+    };
+    let (agents, maps) =
+        tokio::try_join!(get("agents?isPlayableCharacter=true"), get("maps")).context("couldn't load names from valorant-api.com")?;
+    Ok(crate::content::Content::from_responses(&agents, &maps))
 }
 
 #[cfg(test)]

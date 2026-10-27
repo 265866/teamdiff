@@ -1,3 +1,4 @@
+mod content;
 mod controller;
 mod local_files;
 mod model;
@@ -18,7 +19,7 @@ USAGE:
     teamdiff [--dump <dir>]
 
 OPTIONS:
-    --dump <dir>   Save every raw API response under <dir> (for checking field names)
+    --dump <dir>   Save raw API responses under <dir> (for checking field names)
     -h, --help     Show this help
 
 KEYS:
@@ -62,7 +63,7 @@ async fn main() -> Result<()> {
             std::process::exit(2);
         }
     };
-    let shared = Arc::new(Mutex::new(Model::new()));
+    let shared = Arc::new(Mutex::new(Model::new(Arc::default())));
     tokio::spawn(controller::run(shared.clone(), options.dump));
     run_ui(shared)
 }

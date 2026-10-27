@@ -1,6 +1,7 @@
 //! Network side: follows the game's state through presence and loads player data in the background.
 
-use crate::model::{Model, Phase};
+use crate::model::{Lobby, Model, Phase, parse_pregame};
+use crate::presence::LoopState;
 use crate::riot::{Riot, connect};
 use anyhow::Result;
 use std::collections::HashSet;
@@ -41,9 +42,21 @@ async fn release_after(claims: Claims, ids: Vec<String>, delay: Duration) {
     }
 }
 
-/// Runs forever: connects to the Riot Client, follows the game, and reconnects when the client goes
-/// away.
+/// Runs forever: loads names from valorant-api.com, connects to the Riot Client, follows the game,
+/// and reconnects when the client goes away.
 pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
+    loop {
+        match crate::riot::fetch_content().await {
+            Ok(c) => {
+                lock(&shared).content = Arc::new(c);
+                break;
+            }
+            Err(e) => {
+                lock(&shared).phase = Phase::Waiting(format!("{e:#}"));
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
     loop {
         let riot = match connect(dump_dir.clone()).await {
             Ok(r) => Arc::new(r),
@@ -78,13 +91,14 @@ pub async fn run(shared: Shared, dump_dir: Option<PathBuf>) {
 struct Session {
     riot: Arc<Riot>,
     shared: Shared,
+    pregame_id: Option<String>,
     named: Claims,
     client_gone: bool,
 }
 
 impl Session {
     fn new(riot: Arc<Riot>, shared: Shared) -> Self {
-        Self { riot, shared, named: Claims::default(), client_gone: false }
+        Self { riot, shared, pregame_id: None, named: Claims::default(), client_gone: false }
     }
 
     async fn tick(&mut self) -> Result<()> {
@@ -103,7 +117,8 @@ impl Session {
         }
         match state {
             None => self.set_phase(Phase::Waiting("VALORANT isn't running".into())),
-            Some(_) => self.menus(),
+            Some(LoopState::Pregame) => self.pregame().await?,
+            Some(LoopState::Menus | LoopState::Ingame | LoopState::Other(_)) => self.menus(),
         }
         Ok(())
     }
@@ -113,14 +128,47 @@ impl Session {
     }
 
     fn menus(&mut self) {
+        self.pregame_id = None;
         let party: Vec<String> = {
             let mut m = lock(&self.shared);
             m.phase = Phase::Menus;
+            m.lobby = None;
             let my_party = m.my_presence().and_then(|p| p.party_id.clone());
             m.presences.values().filter(|p| p.party_id.is_some() && p.party_id == my_party).map(|p| p.puuid.clone()).collect()
         };
         let me = self.riot.puuid.clone();
         self.load_names(std::iter::once(me).chain(party).collect());
+    }
+
+    async fn pregame(&mut self) -> Result<()> {
+        if self.pregame_id.is_none() {
+            self.pregame_id = self.riot.pregame_match_id().await?;
+        }
+        let Some(id) = self.pregame_id.clone() else { return Ok(()) };
+        let Some(v) = self.riot.pregame_match(&id).await? else {
+            self.pregame_id = None;
+            return Ok(());
+        };
+        if let Some(lobby) = parse_pregame(&v, Instant::now()) {
+            self.show_lobby(Phase::Pregame, lobby);
+        }
+        Ok(())
+    }
+
+    fn show_lobby(&mut self, phase: Phase, lobby: Lobby) {
+        let competitive = lobby.is_competitive();
+        // You're never hidden from yourself.
+        let named: Vec<String> =
+            lobby.slots.iter().filter(|s| !s.incognito || s.puuid == self.riot.puuid).map(|s| s.puuid.clone()).collect();
+        {
+            let mut m = lock(&self.shared);
+            m.phase = phase;
+            m.lobby = Some(lobby);
+        }
+        if competitive {
+            // Incognito players' names are never requested.
+            self.load_names(named);
+        }
     }
 
     fn load_names(&mut self, puuids: Vec<String>) {
