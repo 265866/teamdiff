@@ -1,6 +1,7 @@
 //! Terminal rendering. Every screen is a fixed-width text grid.
 
 use crate::model::{Model, Phase};
+use crate::riot::NetStats;
 use chrono::Utc;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -8,6 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use unicode_width::UnicodeWidthStr;
 
 /// Every screen is this many columns wide; narrower terminals get the too-small screen.
@@ -37,6 +39,12 @@ fn you() -> Style {
 }
 fn good() -> Style {
     fg(rgb(0x4a, 0xde, 0x80))
+}
+fn bad() -> Style {
+    fg(rgb(0xf8, 0x71, 0x71))
+}
+fn warn() -> Style {
+    fg(rgb(0xfb, 0xbf, 0x24))
 }
 const PARTY: [Color; 4] = [rgb(0x60, 0xa5, 0xfa), rgb(0xe8, 0x79, 0xf9), rgb(0xfb, 0x92, 0x3c), rgb(0xa3, 0xe6, 0x35)];
 
@@ -71,6 +79,7 @@ fn keys(pairs: &[(&str, &str)]) -> Vec<Seg> {
 }
 
 const LOADING: &str = "···";
+const ERROR_SHOWN_FOR: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// A screen ready to draw.
 struct Screen {
@@ -174,6 +183,15 @@ fn menus_screen(m: &Model) -> Screen {
 }
 
 // ---------- frame ----------
+fn net_status(net: Option<&NetStats>) -> Vec<Seg> {
+    let Some(net) = net else { return Vec::new() };
+    let (started, finished) = (net.started.load(Ordering::Relaxed), net.finished.load(Ordering::Relaxed));
+    if started == finished {
+        return Vec::new();
+    }
+    vec![s("◐ ", warn()), s(format!("loading {finished}/{started}"), warn())]
+}
+
 fn screen(m: &Model) -> Screen {
     match &m.phase {
         Phase::Waiting(reason) => waiting_screen(reason),
@@ -199,6 +217,10 @@ fn too_small(f: &mut Frame, need_w: u16, need_h: u16) {
 
 pub fn draw(f: &mut Frame, m: &Model) {
     let sc = screen(m);
+    let status = match &m.last_error {
+        Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
+        _ => net_status(m.net.as_deref()),
+    };
     let need_h = sc.rows.len() as u16 + 2;
     let area = f.area();
     if area.width < WIDTH || area.height < need_h {
@@ -214,6 +236,9 @@ pub fn draw(f: &mut Frame, m: &Model) {
         block = block.title(Line::from([vec![s(" ", border())], sc.right, vec![s(" ─", border())]].concat()).right_aligned());
     }
     block = block.title_bottom(Line::from([vec![s("─ ", border())], sc.footer, vec![s(" ", border())]].concat()));
+    if !status.is_empty() {
+        block = block.title_bottom(Line::from([vec![s(" ", border())], status, vec![s(" ─", border())]].concat()).right_aligned());
+    }
     let lines: Vec<Line> = sc.rows.iter().map(|r| Line::from(r.segs.clone())).collect();
     f.render_widget(Paragraph::new(lines).style(text()).block(block), rect);
 }
@@ -223,12 +248,26 @@ pub mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::time::Instant;
 
     pub fn render(m: &Model, w: u16, h: u16) -> Vec<String> {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| draw(f, m)).unwrap();
         let buf = t.backend().buffer();
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string()).collect()
+    }
+
+    #[test]
+    fn request_errors_show_in_the_footer() {
+        let mut m = Model::new();
+        let err = "500 Internal Server Error from /name-service/v2/players, with a reason long enough to be cut off".to_string();
+        m.last_error = Some((err.clone(), Instant::now()));
+        let lines = render(&m, WIDTH, 10);
+        let footer = lines.iter().find(|l| l.starts_with('└')).unwrap();
+        assert!(footer.contains("⚠ 500 Internal Server Error from /name-service/v2/players"), "the status survives truncation: {footer}");
+        m.last_error = Some((err, Instant::now() - ERROR_SHOWN_FOR));
+        let lines = render(&m, WIDTH, 10);
+        assert!(!lines.iter().any(|l| l.contains('⚠')), "old errors fade out");
     }
 
     #[test]

@@ -1,7 +1,10 @@
 //! Application state shared between the network task and the UI.
 
 use crate::presence::Presence;
+use crate::riot::NetStats;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Phase {
@@ -23,6 +26,9 @@ pub struct Model {
     pub players: HashMap<String, PlayerData>,
     /// Latest presence per player.
     pub presences: HashMap<String, Presence>,
+    /// The latest request failure and when it happened; shown briefly in the footer.
+    pub last_error: Option<(String, Instant)>,
+    pub net: Option<Arc<NetStats>>,
 }
 
 impl Model {
@@ -33,6 +39,8 @@ impl Model {
             region: String::new(),
             players: HashMap::new(),
             presences: HashMap::new(),
+            last_error: None,
+            net: None,
         }
     }
 

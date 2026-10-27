@@ -5,7 +5,7 @@ use crate::riot::{Riot, connect};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub type Shared = Arc<Mutex<Model>>;
 
@@ -14,6 +14,10 @@ const RETRY_AFTER: Duration = Duration::from_secs(10);
 
 pub fn lock(shared: &Shared) -> std::sync::MutexGuard<'_, Model> {
     shared.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn report(shared: &Shared, e: &anyhow::Error) {
+    lock(shared).last_error = Some((format!("{e:#}"), Instant::now()));
 }
 
 /// Ids whose load is running or done. A failed load releases its ids after `RETRY_AFTER` so a later
@@ -48,6 +52,8 @@ pub async fn run(shared: Shared) {
             let mut m = lock(&shared);
             m.me = riot.puuid.clone();
             m.region = riot.log.region.to_uppercase();
+            m.last_error = None;
+            m.net = Some(riot.net.clone());
         }
         let mut session = Session::new(riot, shared.clone());
         loop {
@@ -57,8 +63,7 @@ pub async fn run(shared: Shared) {
                     lock(&shared).phase = Phase::Waiting(format!("{e:#}"));
                     break;
                 }
-                // Other failures are retried on the next tick.
-                Err(_) => {}
+                Err(e) => report(&shared, &e),
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -127,7 +132,10 @@ impl Session {
                         m.players.entry(id).or_default().name = Some((name, tag));
                     }
                 }
-                Err(_) => release_after(claims, missing, RETRY_AFTER).await,
+                Err(e) => {
+                    report(&shared, &e);
+                    release_after(claims, missing, RETRY_AFTER).await;
+                }
             }
         });
     }

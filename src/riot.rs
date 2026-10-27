@@ -9,6 +9,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
@@ -24,6 +26,13 @@ struct Tokens {
     entitlement: String,
 }
 
+/// Request counters shown in the status corner.
+#[derive(Debug, Default)]
+pub struct NetStats {
+    pub started: AtomicU32,
+    pub finished: AtomicU32,
+}
+
 pub struct Riot {
     local: reqwest::Client,
     remote: reqwest::Client,
@@ -32,6 +41,7 @@ pub struct Riot {
     pub puuid: String,
     tokens: Tokens,
     permits: Semaphore,
+    pub net: Arc<NetStats>,
 }
 
 /// Connects to the running Riot Client. Fails when the client isn't running or isn't signed in.
@@ -44,7 +54,7 @@ pub async fn connect() -> Result<Riot> {
     let local = reqwest::Client::builder().tls_danger_accept_invalid_certs(true).timeout(Duration::from_secs(5)).build()?;
     let remote = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
     let (tokens, puuid) = fetch_tokens(&local, &lock).await?;
-    Ok(Riot { local, remote, lock, log, puuid, tokens, permits: Semaphore::new(4) })
+    Ok(Riot { local, remote, lock, log, puuid, tokens, permits: Semaphore::new(4), net: Arc::default() })
 }
 
 async fn local_get(client: &reqwest::Client, lock: &Lockfile, path: &str) -> Result<(StatusCode, Value)> {
@@ -83,6 +93,13 @@ impl Riot {
     /// A request to the game's player data server. `Ok(None)` means 404.
     pub async fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
         let _permit = self.permits.acquire().await?;
+        self.net.started.fetch_add(1, Ordering::Relaxed);
+        let result = self.request(method, path, body).await;
+        self.net.finished.fetch_add(1, Ordering::Relaxed);
+        result
+    }
+
+    async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Option<Value>> {
         let mut req = self
             .remote
             .request(method, format!("{}{path}", self.pd()))
