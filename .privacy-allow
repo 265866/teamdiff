@@ -2,3 +2,6 @@
 #
 # uuid <value>          a public game-content id, as valorant-api.com and the game files list it
 # binary <path> <sha256> a binary file, such as an image, someone has checked holds no personal data
+
+uuid add6443a-41bd-e414-f6ad-e58d267f4e95  # agent: Jett
+uuid 7eaecc1b-4337-bbf6-6ab9-04b8f06b3319  # map: Ascent
