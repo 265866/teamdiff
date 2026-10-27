@@ -566,4 +566,34 @@ pub(crate) mod tests {
         assert_eq!(t.transport.get(&data).await.unwrap().status, 200, "the next request opens a new one");
         assert!(open.lock().await.is_some());
     }
+
+    /// Checks that tracker.gg still accepts these requests, with a ranked player who has games this
+    /// act: `TEAMDIFF_LIVE_ID='name#tag' cargo test live -- --ignored --nocapture`. Setting
+    /// `TEAMDIFF_LIVE_PRIVATE_ID` to a player with a private profile also checks that case.
+    #[tokio::test]
+    #[ignore = "calls tracker.gg"]
+    async fn live_tracker_gg() {
+        let id = std::env::var("TEAMDIFF_LIVE_ID").expect("set TEAMDIFF_LIVE_ID to a Riot ID");
+        let (name, tag) = id.split_once('#').expect("name#tag");
+        let t = Tracker::new(Arc::default(), None, std::env::temp_dir().join("teamdiff-live-test"));
+        let path = riot_id_path(name, tag);
+        let v = t.profile(&path).await.unwrap().expect("the player exists");
+        let act = v["data"]["metadata"]["defaultSeason"].as_str().unwrap().to_lowercase();
+        let profile = parse_profile(&v, &act);
+        assert!(profile.tier > 0 && profile.peak_tier >= profile.tier, "{profile:?}");
+        let maps = parse_maps(&t.maps(&path, &act).await.unwrap().unwrap());
+        assert!(!maps.is_empty());
+        let recent = parse_matches(&t.matches(&path).await.unwrap().unwrap(), 5);
+        assert_eq!(recent.len(), 5);
+        assert!(recent.iter().all(|m| m.shots() > 0), "{recent:?}");
+        assert!(t.profile("nobody%23zz9q9zz").await.unwrap().is_none(), "unknown players are a 404");
+        if let Ok(id) = std::env::var("TEAMDIFF_LIVE_PRIVATE_ID") {
+            let (name, tag) = id.split_once('#').expect("name#tag");
+            let err = t.profile(&riot_id_path(name, tag)).await.expect_err("a private profile is refused");
+            assert!(err.is::<Private>(), "{err:#}");
+        }
+        println!("tier {} rr {:?} peak {} act {:?}", profile.tier, profile.rr, profile.peak_tier, profile.acts);
+        println!("maps {maps:?}");
+        println!("kd/hs over 5: {:?}", crate::stats::pooled_kd_hs(&recent));
+    }
 }
