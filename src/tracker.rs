@@ -29,8 +29,9 @@ impl std::error::Error for Private {}
 
 /// Where requests go: the browser, or canned answers in tests.
 enum Transport {
-    /// Started by the first request.
-    Browser { profile_dir: PathBuf, home: String, open: tokio::sync::Mutex<Option<Arc<Browser>>> },
+    /// Started by the first request and closed after `IDLE` without one, so its memory (about
+    /// 100 MB) is only used while stats load.
+    Browser { profile_dir: PathBuf, home: String, open: tokio::sync::Mutex<Option<(Arc<Browser>, Instant)>> },
     #[cfg(test)]
     Canned {
         responses: Mutex<std::collections::VecDeque<Response>>,
@@ -46,7 +47,7 @@ impl Transport {
                 let browser = {
                     let mut open = open.lock().await;
                     let browser = match open.take() {
-                        Some(b) => b,
+                        Some((b, _)) => b,
                         None => {
                             let (dir, home) = (profile_dir.clone(), home.clone());
                             let start = tokio::task::spawn_blocking(move || Browser::start(&dir, &home, REQUEST_TIMEOUT));
@@ -54,14 +55,14 @@ impl Transport {
                             Arc::new(started.map_err(|_| anyhow!("WebView2 didn't start within {} s", REQUEST_TIMEOUT.as_secs()))???)
                         }
                     };
-                    *open = Some(browser.clone());
+                    *open = Some((browser.clone(), Instant::now()));
                     browser
                 };
                 let result = browser.get(url).await;
                 // A browser that timed out or stopped may be stuck; the next request starts a fresh one.
                 if result.is_err() {
                     let mut open = open.lock().await;
-                    if open.as_ref().is_some_and(|b| Arc::ptr_eq(b, &browser)) {
+                    if open.as_ref().is_some_and(|(b, _)| Arc::ptr_eq(b, &browser)) {
                         *open = None;
                     }
                 }
@@ -78,7 +79,7 @@ impl Transport {
     async fn reload(&self) -> Result<()> {
         match self {
             Self::Browser { open, .. } => match open.lock().await.as_ref() {
-                Some(b) => b.reload(),
+                Some((b, _)) => b.reload(),
                 None => Ok(()),
             },
             #[cfg(test)]
@@ -86,6 +87,20 @@ impl Transport {
                 reloads.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
+        }
+    }
+
+    fn close_if_idle(&self) {
+        match self {
+            Self::Browser { open, .. } => {
+                let Ok(mut open) = open.try_lock() else { return };
+                // Requests still running hold their own handle to the browser.
+                if open.as_ref().is_some_and(|(b, used)| used.elapsed() > IDLE && Arc::strong_count(b) == 1) {
+                    *open = None;
+                }
+            }
+            #[cfg(test)]
+            Self::Canned { .. } => {}
         }
     }
 }
@@ -106,6 +121,8 @@ const BLOCK_PAUSE: Duration = Duration::from_secs(300);
 /// The longest `Retry-After` waited out inside a request; longer ones pause every request instead.
 const MAX_INLINE_WAIT: u64 = 30;
 const MAX_RETRY_AFTER: u64 = 86_400;
+/// How long the browser stays open without a request.
+const IDLE: Duration = Duration::from_secs(120);
 /// How long the browser may take to start, and a request to answer, page load included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -125,6 +142,11 @@ impl Tracker {
         let transport =
             Transport::Canned { responses: Mutex::new(responses.into()), sent: Default::default(), reloads: Default::default() };
         Self::with(transport, Arc::default(), None)
+    }
+
+    /// Closes the browser once it has gone `IDLE` without a request.
+    pub fn close_if_idle(&self) {
+        self.transport.close_if_idle();
     }
 
     /// Pauses requests for `wait`, unless an existing pause already lasts longer.
@@ -370,5 +392,27 @@ pub(crate) mod tests {
         assert!(until > Instant::now() + Duration::from_secs(290));
         t.pause(Duration::from_secs(600), "asked to wait");
         assert_eq!(t.paused.lock().unwrap().unwrap().1, "asked to wait", "a longer pause still extends it");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_browser_closes_only_when_idle_and_reopens_on_demand() {
+        let (page, api) = crate::browser::tests::site().await;
+        let profile = crate::browser::tests::Profile::new("idle-test");
+        let transport = Transport::Browser { profile_dir: profile.0.clone(), home: format!("{page}/"), open: Default::default() };
+        let t = Tracker::with(transport, Arc::default(), None);
+        let Transport::Browser { open, .. } = &t.transport else { unreachable!() };
+        let data = format!("{api}/data");
+        assert_eq!(t.transport.get(&data).await.unwrap().status, 200, "the first request opens it");
+        let first = open.lock().await.as_ref().unwrap().0.clone();
+        t.close_if_idle();
+        assert!(open.lock().await.is_some(), "just used");
+        open.lock().await.as_mut().unwrap().1 -= IDLE * 2;
+        t.close_if_idle();
+        assert!(open.lock().await.is_some(), "a request is still holding it");
+        drop(first);
+        t.close_if_idle();
+        assert!(open.lock().await.is_none(), "idle and unused");
+        assert_eq!(t.transport.get(&data).await.unwrap().status, 200, "the next request opens a new one");
+        assert!(open.lock().await.is_some());
     }
 }

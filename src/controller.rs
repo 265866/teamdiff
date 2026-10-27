@@ -143,6 +143,7 @@ impl Session {
             Some(LoopState::Ingame) => self.ingame().await?,
             Some(LoopState::Menus) | Some(LoopState::Other(_)) => self.menus(),
         }
+        self.tracker.close_if_idle();
         Ok(())
     }
 
