@@ -67,11 +67,12 @@ email='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
 # Riot gives players and matches UUIDs, so only the public game-content ids in .privacy-allow pass.
 uuid='[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}'
 # A Riot ID is `name#tag`, `name%23tag` in a URL, or a tag field in a Riot response. Made-up ones
-# use one of the fake tags. Riot names can't contain dots, so a name may not follow one: links into
-# files, such as `README.md#usage` or `riot.rs#L10`, aren't Riot IDs, but `GG. Alpha#DEMO` is one.
-# The tag matches its whole run of letters and digits, so the next ID's boundary isn't consumed;
-# a tag longer than five characters isn't one.
-riot_id='(^|[^A-Za-z0-9_.])[A-Za-z0-9_][A-Za-z0-9_ ]{1,14}[A-Za-z0-9_]#[A-Za-z0-9]{3,}'
+# use one of the fake tags. Riot names can't contain dots, slashes or hyphens, so a name may not
+# follow one: links into files, such as `README.md#usage` or `riot.rs#L10`, issue links in release
+# notes, which name a repository, and anchors after a path segment aren't Riot IDs, but
+# `GG. Alpha#DEMO` is one. The tag matches its whole run of letters and digits, so the next ID's
+# boundary isn't consumed; a tag longer than five characters isn't one.
+riot_id='(^|[^A-Za-z0-9_./-])[A-Za-z0-9_][A-Za-z0-9_ ]{1,14}[A-Za-z0-9_]#[A-Za-z0-9]{3,}'
 # Names can hold any letter, such as `한글` or `José`. Read byte by byte, a name with a non-ASCII letter
 # among its last characters still matches.
 riot_id_intl=$'[\x80-\xff][A-Za-z0-9_ ]{0,14}#[A-Za-z0-9]{3,}'
