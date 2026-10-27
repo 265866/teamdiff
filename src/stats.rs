@@ -103,6 +103,9 @@ pub struct MatchSummary {
     /// team id -> (rounds won, won the match)
     pub teams: HashMap<String, (u32, bool)>,
     pub players: Vec<PlayerMatch>,
+    /// The MVPs Riot named: the match's, and each team's by team id.
+    pub match_mvp: Option<String>,
+    pub team_mvps: HashMap<String, String>,
 }
 
 impl MatchSummary {
@@ -130,6 +133,24 @@ impl MatchSummary {
         Some((mine, theirs, won))
     }
 
+    /// The match MVP Riot named, else the highest-rated player.
+    pub fn mvp(&self) -> Option<&PlayerMatch> {
+        self.match_mvp.as_deref().and_then(|id| self.player(id)).or_else(|| self.best(|_| true))
+    }
+
+    /// The match MVP when they're on `team`, so a team never shows two different MVPs; else the team
+    /// MVP Riot named, else the team's highest-rated player.
+    pub fn team_best(&self, team: &str) -> Option<&PlayerMatch> {
+        self.mvp()
+            .filter(|p| p.team == team)
+            .or_else(|| self.team_mvps.get(team).and_then(|id| self.player(id)))
+            .or_else(|| self.best(|p| p.team == team))
+    }
+
+    fn best(&self, keep: impl Fn(&PlayerMatch) -> bool) -> Option<&PlayerMatch> {
+        self.players.iter().filter(|p| keep(p)).max_by(|a, b| self.rating(a).total_cmp(&self.rating(b)))
+    }
+
     /// Performance Score, with players Riot gave none (such as one who left) below everyone who has
     /// one; ACS for everyone when nobody has one, so the two scales are never compared.
     pub fn rating(&self, p: &PlayerMatch) -> f64 {
@@ -146,11 +167,15 @@ pub fn parse_match(v: &Value) -> Option<MatchSummary> {
         queue: info["queueID"].as_str().or(info["queueId"].as_str()).unwrap_or("").to_string(),
         start_ms: info["gameStartMillis"].as_i64().unwrap_or(0),
         length_ms: info["gameLengthMillis"].as_i64().unwrap_or(0),
+        match_mvp: v["matchMvp"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
         ..Default::default()
     };
     for t in v["teams"].as_array().into_iter().flatten() {
         if let Some(id) = t["teamId"].as_str() {
             m.teams.insert(id.to_string(), (t["roundsWon"].as_u64().unwrap_or(0) as u32, t["won"].as_bool().unwrap_or(false)));
+            if let Some(mvp) = t["mvp"].as_str().filter(|s| !s.is_empty()) {
+                m.team_mvps.insert(id.to_string(), mvp.to_string());
+            }
         }
     }
     let mut by_id: HashMap<String, PlayerMatch> = HashMap::new();
@@ -284,10 +309,51 @@ mod tests {
         assert_eq!(m.player("b").unwrap().performance, Some(331.5));
         assert_eq!(m.score_for("Blue"), Some((13, 9, true)));
         assert_eq!(m.score_for("Red"), Some((9, 13, false)));
+        assert_eq!(m.mvp().unwrap().puuid, "a");
+        assert_eq!(m.team_best("Red").unwrap().puuid, "b");
+    }
+
+    /// Adds Blue player "d", whose Performance Score tops the lobby.
+    fn with_star(v: &mut Value) {
+        let star = json!({ "subject": "d", "teamId": "Blue", "characterId": "sova", "partyId": "p4", "scores": { "TempValueF": 450.0 },
+                           "stats": { "score": 7000, "roundsPlayed": 22, "kills": 30, "deaths": 10, "assists": 2 } });
+        v["players"].as_array_mut().unwrap().push(star);
+    }
+
+    #[test]
+    fn riot_names_the_mvps_when_it_says() {
+        let mut v = match_json();
+        // A second Blue player with the team's top score, whom Riot didn't pick.
+        with_star(&mut v);
+        v["matchMvp"] = json!("b");
+        v["teams"][0]["mvp"] = json!("a");
+        v["teams"][1]["mvp"] = json!("b");
+        let m = parse_match(&v).unwrap();
+        assert_eq!(m.mvp().unwrap().puuid, "b", "Riot's pick, though d has the top score");
+        assert_eq!(m.team_best("Blue").unwrap().puuid, "a", "Riot's pick, though d has Blue's top score");
+
+        v["teams"][0]["mvp"] = json!("nobody");
+        v["matchMvp"] = json!("");
+        let m = parse_match(&v).unwrap();
+        assert_eq!(m.match_mvp, None, "an empty id isn't a pick");
+        assert_eq!(m.mvp().unwrap().puuid, "d", "computed when Riot names no one");
+        assert_eq!(m.team_best("Blue").unwrap().puuid, "d", "computed when Riot's pick isn't in the match");
+    }
+
+    #[test]
+    fn a_team_with_the_match_mvp_shows_them_as_its_mvp() {
+        let mut v = match_json();
+        with_star(&mut v);
+        v["matchMvp"] = json!("a");
+        let m = parse_match(&v).unwrap();
+        assert_eq!(m.team_best("Blue").unwrap().puuid, "a", "not d, which would put two MVPs on Blue");
+        v["teams"][0]["mvp"] = json!("d");
+        let m = parse_match(&v).unwrap();
+        assert_eq!(m.team_best("Blue").unwrap().puuid, "a", "even when Riot's team pick differs");
     }
 
     /// A player who leaves gets no Performance Score. They rank below everyone who has one, rather
-    /// than switching the whole lobby to ACS.
+    /// than switching the whole lobby to ACS and crowning the wrong MVP.
     #[test]
     fn a_player_without_a_performance_score_ranks_last_instead_of_switching_to_acs() {
         let mut v = match_json();
@@ -296,19 +362,17 @@ mod tests {
                               "stats": { "score": 9000, "roundsPlayed": 22, "kills": 30, "deaths": 1, "assists": 0 } });
         v["players"].as_array_mut().unwrap().push(leaver);
         let m = parse_match(&v).unwrap();
-        let rating = |id: &str| m.rating(m.player(id).unwrap());
-        assert!(rating("b") > rating("a"), "b's 400 beats a's 338");
-        assert!(rating("c") < rating("a"), "c's high ACS doesn't count");
+        assert_eq!(m.mvp().unwrap().puuid, "b", "b's 400 beats a's 338; c's high ACS doesn't count");
+        assert!(m.rating(m.player("c").unwrap()) < m.rating(m.player("a").unwrap()));
     }
 
     #[test]
-    fn ratings_fall_back_to_acs_without_performance() {
+    fn mvp_falls_back_to_acs_without_performance() {
         let mut v = match_json();
         v["players"][0]["scores"].as_object_mut().unwrap().remove("TempValueF");
         v["players"][1].as_object_mut().unwrap().remove("scores");
         let m = parse_match(&v).unwrap();
-        assert_eq!(m.rating(m.player("a").unwrap()), 287.0, "a's ACS");
-        assert_eq!(m.rating(m.player("b").unwrap()), 265.0, "b's ACS");
+        assert_eq!(m.mvp().unwrap().puuid, "a", "higher ACS wins");
     }
 
     #[test]

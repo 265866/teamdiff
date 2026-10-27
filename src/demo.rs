@@ -94,6 +94,7 @@ fn summary(id: &str, map: &str, players: Vec<PlayerMatch>, score: (u32, u32), st
         length_ms: 34 * 60_000 + 12_000,
         teams: HashMap::from([("Blue".into(), (score.0, score.0 > score.1)), ("Red".into(), (score.1, score.1 > score.0))]),
         players,
+        ..Default::default()
     }
 }
 
@@ -383,11 +384,13 @@ mod tests {
     }
 
     #[test]
-    fn postgame_orders_by_performance() {
+    fn postgame_orders_by_performance_and_labels_mvps() {
         let s = screen("victory");
         let omen = s.iter().position(|l| l.contains("Omen") && l.contains("431")).unwrap();
         let me = s.iter().position(|l| l.contains("Alpha")).unwrap();
         assert!(omen < me, "sorted by Performance Score");
+        assert!(s[omen].contains("MATCH MVP"));
+        assert!(s.iter().any(|l| l.contains("Echo") && l.contains("TEAM MVP")));
         assert!(s.iter().any(|l| l.contains("+21")));
     }
 

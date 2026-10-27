@@ -56,6 +56,9 @@ fn bad() -> Style {
 fn warn() -> Style {
     fg(rgb(0xfb, 0xbf, 0x24))
 }
+fn gold() -> Style {
+    warn().add_modifier(Modifier::BOLD)
+}
 const CURSOR_BG: Color = rgb(0x1f, 0x2a, 0x37);
 const PARTY: [Color; 4] = [rgb(0x60, 0xa5, 0xfa), rgb(0xe8, 0x79, 0xf9), rgb(0xfb, 0x92, 0x3c), rgb(0xa3, 0xe6, 0x35)];
 
@@ -649,6 +652,7 @@ fn pg_cols() -> Vec<Col> {
         col("ADR", 4, true),
         col("HS%", 4, true),
         col("FB", 3, true),
+        col("", 9, false),
     ]
 }
 
@@ -711,6 +715,7 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
     rows.push(blank());
 
     let cols = pg_cols();
+    let mvp = summary.mvp().map(|p| p.puuid.clone());
     let lobby = pg.lobby.as_ref();
     let incognito = |p: &str| lobby.and_then(|l| l.slots.iter().find(|s| s.puuid == p)).is_some_and(|s| s.incognito);
     let party = party_marks(&m.parties());
@@ -730,6 +735,13 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
             current_team = Some(team.clone());
         }
         let Some(p) = summary.player(puuid) else { continue };
+        let label = if mvp.as_deref() == Some(puuid.as_str()) {
+            Some("MATCH MVP")
+        } else if summary.team_best(team).is_some_and(|b| &b.puuid == puuid) {
+            Some("TEAM MVP")
+        } else {
+            None
+        };
         let diff = p.kills as i64 - p.deaths as i64;
         let perf = p.performance.map(|v| v.round().to_string()).unwrap_or_else(|| "—".into());
         let cells = vec![
@@ -737,7 +749,7 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
             party.get(puuid).map(|mark| vec![mark.clone()]).unwrap_or_else(|| vec![s(" ", Style::new())]),
             vec![s(content.agent(&p.agent_id), bold())],
             name_segs(m, puuid, incognito(puuid), Some(&p.agent_id)),
-            vec![s(perf, bold())],
+            vec![s(perf, if label.is_some() { gold() } else { bold() })],
             vec![s(p.acs().to_string(), text())],
             vec![s(p.kills.to_string(), text())],
             vec![s(p.deaths.to_string(), text())],
@@ -755,6 +767,7 @@ fn postgame_screen(m: &Model, ui: &UiState) -> Screen {
             vec![s(p.adr().to_string(), text())],
             vec![s(p.hs_pct().map(|h| format!("{h}%")).unwrap_or_else(|| "—".into()), text())],
             vec![s(p.first_kills.to_string(), text())],
+            vec![s(label.unwrap_or(""), gold())],
         ];
         let mut row = join(&cols, cells);
         if cursor_id.as_deref() == Some(puuid.as_str()) {
