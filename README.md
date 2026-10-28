@@ -1,5 +1,7 @@
 # teamdiff
 
+[![Latest release](https://img.shields.io/github/v/release/265866/teamdiff)](https://github.com/265866/teamdiff/releases/latest)
+
 A terminal companion for VALORANT on Windows. teamdiff reads the Riot Client running on your PC and
 shows your lobby as the game moves through menus, agent select, the match, and the post-game screen.
 
