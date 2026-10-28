@@ -28,6 +28,11 @@ pub fn lockfile_path() -> Option<PathBuf> {
     local_app_data().map(|d| d.join("Riot Games").join("Riot Client").join("Config").join("lockfile"))
 }
 
+/// The version of teamdiff that last ran, so the next one can tell it was updated.
+pub fn last_version_path() -> Option<PathBuf> {
+    local_app_data().map(|d| d.join("teamdiff").join("version"))
+}
+
 /// The tracker.gg browser's own profile, which keeps its cookies between runs.
 pub fn browser_profile_dir() -> Option<PathBuf> {
     local_app_data().map(|d| d.join("teamdiff").join("WebView2"))
