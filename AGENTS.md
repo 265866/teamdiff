@@ -19,6 +19,9 @@ cargo test --locked --all-targets --all-features
 scripts/privacy-check.sh
 ```
 
+CI also lints the workflow files with [actionlint](https://github.com/rhysd/actionlint). Run
+`actionlint` too when you change one.
+
 teamdiff builds and runs only on Windows. Some tests start a hidden WebView2 browser, which needs the
 Microsoft Edge WebView2 Runtime. `cargo run -- --demo` shows every screen with made-up players and
 needs no game, so use it to check UI changes.
