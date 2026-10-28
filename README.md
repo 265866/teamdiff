@@ -31,10 +31,16 @@ lists what changed and who changed it.
 teamdiff isn't code-signed yet. When you run a `teamdiff.exe` you downloaded, Windows may show
 "Windows protected your PC". Click **More info**, then **Run anyway**.
 
+teamdiff keeps itself up to date. When it starts, and every hour while it runs, it asks GitHub for
+the latest release. It downloads a newer `teamdiff.exe`, checks that this repository's release
+workflow built it, and puts it in place of the old one. The footer then says the new version runs
+when you restart teamdiff. Keep `teamdiff.exe` in a folder you can write to, such as one under your
+user folder, so it can update. To stop updates, run `teamdiff --no-update`.
+
 `teamdiff --licenses` prints the licenses of the open-source code teamdiff is built with.
 
 To build it yourself instead, install what [CONTRIBUTING.md](CONTRIBUTING.md) lists, then run
-`cargo run --release`.
+`cargo run --release`. A build you make yourself never updates itself.
 
 ### Check a download
 
@@ -118,6 +124,7 @@ support, and Riot hasn't reviewed it. Use it at your own risk.
   load only when you open a player's details.
 - valorant-api.com for agent, map, rank, and act names.
 - `ShooterGame.log` for the region, shard, and client version.
+- GitHub for teamdiff's latest release, unless you run `teamdiff --no-update` or built it yourself.
 
 tracker.gg usually leaves out other players' RR, so ranks often show without it. Win rate on the
 current map is the player's record on it this act. K/D and HS% are totals over the last 5 competitive

@@ -77,6 +77,26 @@ welcome first-time contributors by name. The **PR labels** workflow labels each 
 title, and `.github/release.yml` groups the notes by those labels into breaking changes, features,
 fixes and other changes.
 
+## Keep the updater working
+
+Release builds of teamdiff update from the latest release of `265866/teamdiff`. They find and accept
+an update only when all of these hold:
+
+- The release's tag is `v` followed by a version with no pre-release part, such as `v0.3.0`.
+- The release has the files `teamdiff-<version>-x64.exe` and `attestation.json`.
+- `attestation.json` shows that `.github/workflows/release.yml` built that exe on `main`, on a
+  GitHub-hosted runner, in this repository.
+
+Changing any of these, such as renaming the workflow, the repository or the exe, makes every copy
+out there stop updating without telling anyone.
+
+Only a build with `TEAMDIFF_RELEASE_BUILD` set while it compiles updates itself, and the release build
+sets it. Builds you make with `cargo` never update.
+
+`sigstore-verify` is pinned to an exact version, and its trusted Sigstore keys are built into
+teamdiff. Update it when a new version comes out, so releases keep up with any change Sigstore makes
+to its keys.
+
 ## License
 
 teamdiff is licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the

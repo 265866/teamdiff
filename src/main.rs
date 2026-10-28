@@ -11,6 +11,7 @@ mod riot;
 mod stats;
 mod tracker;
 mod ui;
+mod update;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -23,12 +24,13 @@ use ui::{UiState, View};
 const HELP: &str = "teamdiff: a terminal tracker for your VALORANT matches
 
 USAGE:
-    teamdiff [--dump <dir>]
+    teamdiff [--dump <dir>] [--no-update]
     teamdiff --demo [screen]
     teamdiff --licenses
 
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
+    --no-update    Don't install new releases of teamdiff by itself
     --demo         Show sample data instead of connecting; Tab cycles screens
                    (waiting, menus, agent-select, loading, in-game, victory, defeat)
     --licenses     Print the licenses of the open-source code teamdiff is built with
@@ -51,7 +53,13 @@ const LICENSES: &str = include_str!(concat!(env!("OUT_DIR"), "/THIRD-PARTY-LICEN
 enum Command {
     Help,
     Licenses,
-    Run(Mode),
+    Run(Args),
+}
+
+struct Args {
+    mode: Mode,
+    /// Whether to install new releases; a demo never does.
+    update: bool,
 }
 
 enum Mode {
@@ -62,6 +70,7 @@ enum Mode {
 fn parse_args() -> Result<Command, String> {
     let mut args = std::env::args().skip(1).peekable();
     let mut mode = Mode::Live { dump: None };
+    let mut update = true;
     while let Some(a) = args.next() {
         match a.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
@@ -85,16 +94,17 @@ fn parse_args() -> Result<Command, String> {
                 };
                 mode = Mode::Demo { screen };
             }
+            "--no-update" => update = false,
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
-    Ok(Command::Run(mode))
+    Ok(Command::Run(Args { mode, update }))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mode = match parse_args() {
-        Ok(Command::Run(m)) => m,
+    let Args { mode, update } = match parse_args() {
+        Ok(Command::Run(args)) => args,
         Ok(Command::Help) => {
             println!("{HELP}");
             return Ok(());
@@ -115,6 +125,9 @@ async fn main() -> Result<()> {
     }));
     if let Mode::Live { dump } = &mode {
         tokio::spawn(controller::run(shared.clone(), dump.clone()));
+        if update && update::enabled() {
+            tokio::spawn(update::run(shared.clone()));
+        }
     }
     let demo_screen = match mode {
         Mode::Demo { screen } => Some(screen),

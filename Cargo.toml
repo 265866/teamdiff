@@ -20,7 +20,9 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+semver = "1.0.28"
 serde_json = "1.0.154"
+sigstore-verify = { version = "=0.15.1", default-features = false, features = ["aws-lc-rs"] }
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
 unicode-width = "0.2.2"
 webview2-com = "0.39.1"
