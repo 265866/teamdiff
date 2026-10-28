@@ -1,0 +1,31 @@
+# Checked in CI by `cargo deny check`. teamdiff ships only for Windows, so only that target's
+# dependency graph is checked.
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+all-features = true
+
+# Release builds install themselves on players' PCs, so a dependency with a known vulnerability
+# fails the check. Unmaintained crates fail only when teamdiff depends on them directly.
+[advisories]
+unmaintained = "workspace"
+ignore = []
+
+# Release builds carry every dependency's license notice, so only licenses that allow bundling a
+# notice are accepted. Keep this list in step with about.toml.
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
