@@ -25,11 +25,13 @@ const HELP: &str = "teamdiff: a terminal tracker for your VALORANT matches
 USAGE:
     teamdiff [--dump <dir>]
     teamdiff --demo [screen]
+    teamdiff --licenses
 
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
     --demo         Show sample data instead of connecting; Tab cycles screens
                    (waiting, menus, agent-select, loading, in-game, victory, defeat)
+    --licenses     Print the licenses of the open-source code teamdiff is built with
     -h, --help     Show this help
 
 KEYS:
@@ -43,17 +45,27 @@ associated properties are trademarks or registered trademarks of Riot Games, Inc
 teamdiff was created under Riot Games' \"Legal Jibber Jabber\" policy using assets owned by Riot Games.
 Riot Games does not endorse or sponsor this project.";
 
+/// The dependencies' license notices, which build.rs embeds.
+const LICENSES: &str = include_str!(concat!(env!("OUT_DIR"), "/THIRD-PARTY-LICENSES.txt"));
+
+enum Command {
+    Help,
+    Licenses,
+    Run(Mode),
+}
+
 enum Mode {
     Live { dump: Option<PathBuf> },
     Demo { screen: usize },
 }
 
-fn parse_args() -> Result<Option<Mode>, String> {
+fn parse_args() -> Result<Command, String> {
     let mut args = std::env::args().skip(1).peekable();
     let mut mode = Mode::Live { dump: None };
     while let Some(a) = args.next() {
         match a.as_str() {
-            "-h" | "--help" => return Ok(None),
+            "-h" | "--help" => return Ok(Command::Help),
+            "--licenses" => return Ok(Command::Licenses),
             "--dump" => {
                 // A flag after --dump is a flag, not a directory to fill with live responses.
                 let dir = args.next_if(|a| !a.starts_with('-')).ok_or("--dump needs a directory")?;
@@ -76,15 +88,20 @@ fn parse_args() -> Result<Option<Mode>, String> {
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
-    Ok(Some(mode))
+    Ok(Command::Run(mode))
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let mode = match parse_args() {
-        Ok(Some(m)) => m,
-        Ok(None) => {
+        Ok(Command::Run(m)) => m,
+        Ok(Command::Help) => {
             println!("{HELP}");
+            return Ok(());
+        }
+        Ok(Command::Licenses) => {
+            // A pager that quits early closes the pipe, which print! would panic on.
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), LICENSES.as_bytes());
             return Ok(());
         }
         Err(e) => {

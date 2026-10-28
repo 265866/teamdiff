@@ -31,6 +31,8 @@ lists what changed and who changed it.
 teamdiff isn't code-signed yet. When you run a `teamdiff.exe` you downloaded, Windows may show
 "Windows protected your PC". Click **More info**, then **Run anyway**.
 
+`teamdiff --licenses` prints the licenses of the open-source code teamdiff is built with.
+
 To build it yourself instead, install what [CONTRIBUTING.md](CONTRIBUTING.md) lists, then run
 `cargo run --release`.
 
