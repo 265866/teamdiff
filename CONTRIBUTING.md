@@ -67,7 +67,11 @@ To ship:
 
 1. Open the release pull request and read the changelog. If an entry needs work, edit
    `CHANGELOG.md` on its branch in a signed commit with a scoped subject, such as
-   `docs(changelog): reword the lobby entry`. Your push starts its checks.
+   `docs(changelog): reword the lobby entry`. Your push starts its checks. release-plz leaves out
+   commits that change only `Cargo.lock`, such as a dependency update. When one matters to players,
+   such as a security fix, add it to `CHANGELOG.md` there too. Edit just before you merge, because
+   after an edit, the next merge to `main` closes the release pull request and opens a new one
+   without it.
 2. If you made no edit, approve the waiting workflow runs on the pull request's page. A workflow
    opened it, so GitHub holds its checks until someone approves them, and again after each update
    release-plz pushes.
