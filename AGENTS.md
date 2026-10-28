@@ -80,6 +80,8 @@ match, honor `Retry-After`, and back off when tracker.gg refuses a request.
 
 - Write Conventional Commits with a scope, such as `feat(lobby): show ranks`. CI checks every commit
   subject and the pull request title.
+- Don't end a commit subject with a pull request number such as `(#12)`. Merge commits end that way,
+  and the changelog leaves out every commit whose subject does.
 - Every commit builds and passes the checks on its own.
 - Sign your commits. `main` takes merge commits only, so signatures survive the merge.
 - Commit with an email address you're happy to publish in every commit. GitHub's noreply address,

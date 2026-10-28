@@ -33,3 +33,18 @@ body = """
 {% endfor -%}
 {% endfor -%}
 """
+# With the repository's merge commit title set to the pull request title, GitHub ends each merge
+# commit's subject in "(#N)". release-plz lists a merge commit whose merge touched a file both
+# sides changed, which repeats the commits it merged. CI rejects commit subjects ending in "(#N)",
+# so a first line ending in it, or in the link release-plz makes of it, marks a merge commit. The
+# rest are release-plz's default groups.
+commit_parsers = [
+    { message = '\A[^\n]*\((\[)?#[0-9]+(\]\([^)\n]*\))?\)(\n|\z)', skip = true },
+    { message = "^feat", group = "added" },
+    { message = "^changed", group = "changed" },
+    { message = "^deprecated", group = "deprecated" },
+    { message = "^removed", group = "removed" },
+    { message = "^fix", group = "fixed" },
+    { message = "^security", group = "security" },
+    { message = ".*", group = "other" },
+]
