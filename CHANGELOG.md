@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/265866/teamdiff/compare/v0.1.0...v0.2.0) - 2026-10-28
+
+### Added
+
+- *(update)* link the release notes on the first start after an update ([#15](https://github.com/265866/teamdiff/pull/15))
+- *(app)* show teamdiff's version with --version and in the footer ([#14](https://github.com/265866/teamdiff/pull/14))
+
+### Security
+
+- *(deps)* update rustls-webpki to 0.103.16, which no longer accepts certificates through distrusted intermediates ([RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)) ([#13](https://github.com/265866/teamdiff/pull/13))
+
+### Other
+
+- *(release)* leave merge commits out of the changelog ([#18](https://github.com/265866/teamdiff/pull/18))
+- *(deps)* check dependencies for vulnerabilities and licenses with cargo-deny ([#13](https://github.com/265866/teamdiff/pull/13))
+- *(readme)* show the latest release ([#16](https://github.com/265866/teamdiff/pull/16))
+- *(lint)* lint the workflow files with actionlint ([#12](https://github.com/265866/teamdiff/pull/12))
+
 ## [0.1.0](https://github.com/265866/teamdiff/releases/tag/v0.1.0) - 2026-10-28
 
 ### Added
