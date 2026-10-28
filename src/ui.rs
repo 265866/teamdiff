@@ -1140,7 +1140,10 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState, icons: &Icons) {
         _ => match (net_status(m.net.as_deref()), &m.update_ready) {
             (net, Some(version)) if net.is_empty() => vec![s(format!("teamdiff {version} is ready · restart to use it"), good())],
             (net, _) if !net.is_empty() => net,
-            _ => vec![s(concat!("v", env!("CARGO_PKG_VERSION")), dim())],
+            _ => match &m.updated {
+                Some(version) => vec![s(format!("new in {version}: {}", crate::update::RELEASES), good())],
+                None => vec![s(concat!("v", env!("CARGO_PKG_VERSION")), dim())],
+            },
         },
     };
     let need_h = (sc.rows.len() as u16 + 2).max(if ui.legend { LEGEND_HEIGHT } else { 0 });
@@ -1264,6 +1267,16 @@ pub mod tests {
         assert!(footer(&m).contains(concat!(" v", env!("CARGO_PKG_VERSION"), " ")), "{}", footer(&m));
         m.last_error = Some(("503 Service Unavailable".into(), Instant::now()));
         assert!(!footer(&m).contains(concat!(" v", env!("CARGO_PKG_VERSION"))), "an error takes its place");
+    }
+
+    #[test]
+    fn after_an_update_the_footer_links_the_release_notes_beside_the_longest_keys() {
+        let mut m = crate::demo::model("in-game");
+        m.updated = Some(semver::Version::new(0, 12, 0));
+        let lines = render(&m, &UiState::default(), WIDTH, 40);
+        let footer = lines.iter().find(|l| l.starts_with('└')).unwrap();
+        assert!(footer.contains("enter details  ? legend  q quit"), "{footer}");
+        assert!(footer.contains("new in 0.12.0: https://github.com/265866/teamdiff/releases "), "{footer}");
     }
 
     #[test]

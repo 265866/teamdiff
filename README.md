@@ -34,8 +34,9 @@ teamdiff isn't code-signed yet. When you run a `teamdiff.exe` you downloaded, Wi
 teamdiff keeps itself up to date. When it starts, and every hour while it runs, it asks GitHub for
 the latest release. It downloads a newer `teamdiff.exe`, checks that this repository's release
 workflow built it, and puts it in place of the old one. The footer then says the new version runs
-when you restart teamdiff. Keep `teamdiff.exe` in a folder you can write to, such as one under your
-user folder, so it can update. To stop updates, run `teamdiff --no-update`.
+when you restart teamdiff, and after the restart it links the release notes. Keep `teamdiff.exe` in a
+folder you can write to, such as one under your user folder, so it can update. To stop updates, run
+`teamdiff --no-update`.
 
 `teamdiff --version` prints which version you have, and the window's bottom-right corner shows it when
 nothing else is there. `teamdiff --licenses` prints the licenses of the open-source code teamdiff is

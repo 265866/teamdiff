@@ -193,6 +193,8 @@ pub struct Model {
     pub net: Option<Arc<NetStats>>,
     /// A newer version that replaced this exe and runs the next time teamdiff starts.
     pub update_ready: Option<semver::Version>,
+    /// This version, when it replaced an older one since teamdiff last ran.
+    pub updated: Option<semver::Version>,
 }
 
 impl Model {
@@ -213,6 +215,7 @@ impl Model {
             last_error: None,
             net: None,
             update_ready: None,
+            updated: None,
         }
     }
 

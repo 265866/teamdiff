@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const LATEST_RELEASE: &str = "https://api.github.com/repos/265866/teamdiff/releases/latest";
+/// Every release, newest first, with what each changed.
+pub const RELEASES: &str = "https://github.com/265866/teamdiff/releases";
 /// Where GitHub serves a release's files, by tag and file name.
 const DOWNLOADS: &str = "https://github.com/265866/teamdiff/releases/download";
 /// The release workflow attaches it to every release.
@@ -45,6 +47,29 @@ pub fn enabled() -> bool {
 
 fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version is semver")
+}
+
+/// The running version when an older one ran last, or, with no record, when an update moved an exe aside. Records the
+/// running version for next time.
+pub fn updated() -> Option<Version> {
+    let replaced = std::env::current_exe().is_ok_and(|exe| moved_aside(&exe));
+    updated_since(&crate::local_files::last_version_path()?, &current_version(), replaced)
+}
+
+/// With no record, as on the first start after an update from a version that kept none, an exe the update moved aside
+/// (`replaced`) tells instead.
+fn updated_since(record: &Path, current: &Version, replaced: bool) -> Option<Version> {
+    let last = std::fs::read_to_string(record).ok().and_then(|v| Version::parse(v.trim()).ok());
+    if last.as_ref() != Some(current) {
+        // Without the record, the next start just doesn't say it was updated.
+        let _ = record.parent().map(std::fs::create_dir_all);
+        let _ = std::fs::write(record, current.to_string());
+    }
+    let updated = match last {
+        Some(last) => last < *current,
+        None => replaced,
+    };
+    updated.then(|| current.clone())
 }
 
 /// Installs each newer release as it comes out, and says so in the footer once one is in place.
@@ -206,18 +231,27 @@ fn replace(exe: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Deletes the exes earlier updates moved aside beside `exe`, and downloads an update left unfinished. Windows refuses to delete
-/// one a teamdiff still runs from, so that one goes on a later start.
+/// The files updates left beside `exe`: exes they moved aside (`.old`) and downloads they didn't finish (`.new`).
+fn left_by_updates(exe: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(name)) = (exe.parent(), exe.file_name().and_then(|n| n.to_str())) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let left = |file: &str| {
+        let rest = file.strip_prefix(name)?.strip_prefix('.')?;
+        let pid = rest.strip_suffix(".old").or_else(|| rest.strip_suffix(".new"))?;
+        Some(!pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()))
+    };
+    entries.flatten().filter(|e| e.file_name().to_str().and_then(left) == Some(true)).map(|e| e.path()).collect()
+}
+
+/// Whether an update moved an exe aside beside `exe`, which only a finished update does.
+fn moved_aside(exe: &Path) -> bool {
+    left_by_updates(exe).iter().any(|f| f.extension().is_some_and(|e| e == "old"))
+}
+
+/// Deletes [`left_by_updates`]. Windows refuses to delete an exe a teamdiff still runs from, so that one goes on a later start.
 fn remove_replaced(exe: &Path) {
-    let (Some(dir), Some(name)) = (exe.parent(), exe.file_name().and_then(|n| n.to_str())) else { return };
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let file = entry.file_name();
-        let Some(rest) = file.to_str().and_then(|f| f.strip_prefix(name)).and_then(|f| f.strip_prefix('.')) else { continue };
-        let left = rest.strip_suffix(".old").or_else(|| rest.strip_suffix(".new"));
-        if left.is_some_and(|pid| !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())) {
-            let _ = std::fs::remove_file(entry.path());
-        }
+    for file in left_by_updates(exe) {
+        let _ = std::fs::remove_file(file);
     }
 }
 
@@ -342,6 +376,47 @@ mod tests {
         running.wait().unwrap();
         remove_replaced(&exe);
         assert_eq!(files(&dir), ["teamdiff.exe"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn says_when_a_newer_version_starts_than_the_one_that_ran_last() {
+        let dir = temp_dir("record");
+        let record = dir.join("teamdiff").join("version");
+        let v = |s: &str| Version::parse(s).unwrap();
+        assert_eq!(updated_since(&record, &v("0.1.0"), false), None, "the first run has nothing to compare with");
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "0.1.0");
+        assert_eq!(updated_since(&record, &v("0.1.0"), false), None);
+        assert_eq!(updated_since(&record, &v("0.2.0"), false), Some(v("0.2.0")));
+        assert_eq!(updated_since(&record, &v("0.2.0"), false), None, "only the first start after an update says so");
+        assert_eq!(updated_since(&record, &v("0.1.5"), false), None, "going back isn't an update");
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "0.1.5");
+        std::fs::write(&record, "not a version").unwrap();
+        assert_eq!(updated_since(&record, &v("0.3.0"), false), None);
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "0.3.0");
+        assert_eq!(updated_since(&record, &v("0.3.0"), true), None, "an exe left from an earlier update says nothing new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_update_from_a_version_that_kept_no_record_still_says_so() {
+        let dir = temp_dir("no-record");
+        let record = dir.join("version");
+        assert_eq!(updated_since(&record, &Version::new(0, 2, 0), true), Some(Version::new(0, 2, 0)));
+        assert_eq!(updated_since(&record, &Version::new(0, 2, 0), true), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn finds_the_exe_an_update_moved_aside() {
+        let dir = temp_dir("left");
+        let exe = dir.join("teamdiff.exe");
+        for name in ["teamdiff.exe", "teamdiff.exe.12.new", "teamdiff.exe.old", "other.exe.34.old"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        assert!(!moved_aside(&exe), "a download left unfinished isn't an update");
+        std::fs::write(dir.join("teamdiff.exe.34.old"), b"x").unwrap();
+        assert!(moved_aside(&exe));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
