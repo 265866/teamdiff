@@ -21,14 +21,35 @@ shows your lobby as the game moves through menus, agent select, the match, and t
 
 Only competitive matches are tracked for now.
 
+## Download
+
+teamdiff runs on Windows 10 and 11. Get `teamdiff-<version>-x64.zip` from the
+[latest release](https://github.com/265866/teamdiff/releases/latest), unzip it into a folder of your
+own, start VALORANT, and run `teamdiff.exe` from Windows Terminal or another terminal. Each release
+lists what changed and who changed it.
+
+teamdiff isn't code-signed yet. When you run a `teamdiff.exe` you downloaded, Windows may show
+"Windows protected your PC". Click **More info**, then **Run anyway**.
+
+To build it yourself instead, install what [CONTRIBUTING.md](CONTRIBUTING.md) lists, then run
+`cargo run --release`.
+
+### Check a download
+
+This repository's release workflow builds every release on GitHub, and signs a statement that names
+each file it built. The release attaches that statement as `attestation.json`. Download it next to
+your file, then check the file with the [GitHub CLI](https://cli.github.com/). With `--bundle`, the
+check works without signing in:
+
+```powershell
+gh attestation verify teamdiff-<version>-x64.zip --repo 265866/teamdiff --bundle attestation.json
+```
+
+It prints that verification succeeded, or why it failed. Each release also lists the files' SHA-256
+hashes in `SHA256SUMS.txt`. To compare one in PowerShell, run `Get-FileHash teamdiff-<version>-x64.zip`
+and match its hash against the file's line. The hash in `SHA256SUMS.txt` is lowercase.
+
 ## Running it
-
-teamdiff runs on Windows 10 and 11. [CONTRIBUTING.md](CONTRIBUTING.md) lists what you need to build
-it. Start VALORANT, then run:
-
-```
-cargo run --release
-```
 
 The terminal needs to be at least 112 columns wide, and tall enough for the screen it shows; teamdiff
 says how many rows it needs.
