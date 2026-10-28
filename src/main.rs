@@ -21,12 +21,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use ui::{UiState, View};
 
-const HELP: &str = "teamdiff: a terminal tracker for your VALORANT matches
+const HELP: &str = concat!(
+    "teamdiff ",
+    env!("CARGO_PKG_VERSION"),
+    ": a terminal tracker for your VALORANT matches
 
 USAGE:
     teamdiff [--dump <dir>] [--no-update]
     teamdiff --demo [screen]
     teamdiff --licenses
+    teamdiff --version
 
 OPTIONS:
     --dump <dir>   Save raw API responses under <dir> (for checking field names)
@@ -34,6 +38,7 @@ OPTIONS:
     --demo         Show sample data instead of connecting; Tab cycles screens
                    (waiting, menus, agent-select, loading, in-game, victory, defeat)
     --licenses     Print the licenses of the open-source code teamdiff is built with
+    -V, --version  Print teamdiff's version
     -h, --help     Show this help
 
 KEYS:
@@ -45,7 +50,8 @@ anyone officially involved in producing or managing Riot Games properties. Riot 
 associated properties are trademarks or registered trademarks of Riot Games, Inc.
 
 teamdiff was created under Riot Games' \"Legal Jibber Jabber\" policy using assets owned by Riot Games.
-Riot Games does not endorse or sponsor this project.";
+Riot Games does not endorse or sponsor this project."
+);
 
 /// The dependencies' license notices, which build.rs embeds.
 const LICENSES: &str = include_str!(concat!(env!("OUT_DIR"), "/THIRD-PARTY-LICENSES.txt"));
@@ -53,6 +59,7 @@ const LICENSES: &str = include_str!(concat!(env!("OUT_DIR"), "/THIRD-PARTY-LICEN
 enum Command {
     Help,
     Licenses,
+    Version,
     Run(Args),
 }
 
@@ -75,6 +82,7 @@ fn parse_args() -> Result<Command, String> {
         match a.as_str() {
             "-h" | "--help" => return Ok(Command::Help),
             "--licenses" => return Ok(Command::Licenses),
+            "-V" | "--version" => return Ok(Command::Version),
             "--dump" => {
                 // A flag after --dump is a flag, not a directory to fill with live responses.
                 let dir = args.next_if(|a| !a.starts_with('-')).ok_or("--dump needs a directory")?;
@@ -112,6 +120,10 @@ async fn main() -> Result<()> {
         Ok(Command::Licenses) => {
             // A pager that quits early closes the pipe, which print! would panic on.
             let _ = std::io::Write::write_all(&mut std::io::stdout(), LICENSES.as_bytes());
+            return Ok(());
+        }
+        Ok(Command::Version) => {
+            println!("teamdiff {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
         Err(e) => {

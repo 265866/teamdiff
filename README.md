@@ -39,7 +39,9 @@ workflow built it, and puts it in place of the old one. The footer then says the
 when you restart teamdiff. Keep `teamdiff.exe` in a folder you can write to, such as one under your
 user folder, so it can update. To stop updates, run `teamdiff --no-update`.
 
-`teamdiff --licenses` prints the licenses of the open-source code teamdiff is built with.
+`teamdiff --version` prints which version you have, and the window's bottom-right corner shows it when
+nothing else is there. `teamdiff --licenses` prints the licenses of the open-source code teamdiff is
+built with.
 
 To build it yourself instead, install what [CONTRIBUTING.md](CONTRIBUTING.md) lists, then run
 `cargo run --release`. A build you make yourself never updates itself.

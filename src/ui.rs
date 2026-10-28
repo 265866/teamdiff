@@ -1139,7 +1139,8 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState, icons: &Icons) {
         Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
         _ => match (net_status(m.net.as_deref()), &m.update_ready) {
             (net, Some(version)) if net.is_empty() => vec![s(format!("teamdiff {version} is ready · restart to use it"), good())],
-            (net, _) => net,
+            (net, _) if !net.is_empty() => net,
+            _ => vec![s(concat!("v", env!("CARGO_PKG_VERSION")), dim())],
         },
     };
     let need_h = (sc.rows.len() as u16 + 2).max(if ui.legend { LEGEND_HEIGHT } else { 0 });
@@ -1254,6 +1255,15 @@ pub mod tests {
         m.last_error = Some((err, Instant::now() - ERROR_SHOWN_FOR));
         let lines = render(&m, &UiState::default(), WIDTH, 10);
         assert!(!lines.iter().any(|l| l.contains('⚠')), "old errors fade out");
+    }
+
+    #[test]
+    fn the_footer_shows_the_version_when_nothing_else_is_going_on() {
+        let mut m = Model::new(std::sync::Arc::default());
+        let footer = |m: &Model| render(m, &UiState::default(), WIDTH, 10).into_iter().find(|l| l.starts_with('└')).unwrap();
+        assert!(footer(&m).contains(concat!(" v", env!("CARGO_PKG_VERSION"), " ")), "{}", footer(&m));
+        m.last_error = Some(("503 Service Unavailable".into(), Instant::now()));
+        assert!(!footer(&m).contains(concat!(" v", env!("CARGO_PKG_VERSION"))), "an error takes its place");
     }
 
     #[test]
