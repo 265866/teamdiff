@@ -1,0 +1,125 @@
+name: Release
+
+# On every push to main, release-plz either tags a release (when the push merged the release pull
+# request) or opens and updates the release pull request. A tagged release is built from its tag,
+# attested, and only then published on GitHub with its files, so a published release always has
+# them. If building or publishing fails, re-running the failed jobs picks up from the same tag.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - run: rustup toolchain install
+
+      - name: Tag if this push merged the release pull request
+        id: release-plz
+        uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
+        with:
+          command: release
+          version: 0.4.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read the tag
+        id: tag
+        env:
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          tag=$(jq -r '.[] | select(.package_name == "teamdiff") | .tag' <<< "${RELEASES:-[]}")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: release
+    if: needs.release.outputs.tag != ''
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-release.yml
+    with:
+      ref: ${{ needs.release.outputs.tag }}
+
+  publish:
+    name: Attest and publish
+    needs: [release, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Attest the zip
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.zip
+
+      # The release carries the attestation so that it can be checked without GitHub's API. gh keeps
+      # a new release a draft until its files are uploaded. The notes are GitHub's, grouped by
+      # .github/release.yml, and credit each pull request's author.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" dist/attestation.json
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # A draft survives only if a run was killed mid-upload; gh deletes it on a failed one.
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          else
+            gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "teamdiff ${TAG#v}" --generate-notes --latest
+          fi
+
+  release-pr:
+    name: Update the release pull request
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-pr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - run: rustup toolchain install
+
+      - uses: release-plz/action@f67a7e724bdad4a0f6875f186060a0ca2770d76c # v0.5.147
+        with:
+          command: release-pr
+          version: 0.4.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

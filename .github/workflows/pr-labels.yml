@@ -1,0 +1,35 @@
+name: PR labels
+
+# Labels each pull request from its Conventional Commit title so .github/release.yml can group the
+# release notes. pull_request_target gives a token that can label pull requests from forks too. That
+# is safe here only because this job never checks out or runs code from the pull request.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened]
+
+permissions: {}
+
+jobs:
+  label:
+    name: Label from the title
+    # Dependabot's runs get a read-only token, and its chore and ci titles need no label.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          add=() remove=()
+          want() { if [[ "$TITLE" =~ $2 ]]; then add+=("$1"); else remove+=("$1"); fi; }
+          want breaking '^[a-z]+\([a-z0-9][a-z0-9_/-]*\)!:'
+          want feature '^feat\([a-z0-9][a-z0-9_/-]*\)!?:'
+          want fix '^fix\([a-z0-9][a-z0-9_/-]*\)!?:'
+          args=()
+          for label in "${add[@]}"; do args+=(--add-label "$label"); done
+          for label in "${remove[@]}"; do args+=(--remove-label "$label"); done
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" "${args[@]}"
