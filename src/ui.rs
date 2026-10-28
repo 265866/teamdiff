@@ -1137,7 +1137,10 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState, icons: &Icons) {
     let sc = screen(m, ui);
     let status = match &m.last_error {
         Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
-        _ => net_status(m.net.as_deref()),
+        _ => match (net_status(m.net.as_deref()), &m.update_ready) {
+            (net, Some(version)) if net.is_empty() => vec![s(format!("teamdiff {version} is ready · restart to use it"), good())],
+            (net, _) => net,
+        },
     };
     let need_h = (sc.rows.len() as u16 + 2).max(if ui.legend { LEGEND_HEIGHT } else { 0 });
     let area = f.area();
@@ -1251,6 +1254,19 @@ pub mod tests {
         m.last_error = Some((err, Instant::now() - ERROR_SHOWN_FOR));
         let lines = render(&m, &UiState::default(), WIDTH, 10);
         assert!(!lines.iter().any(|l| l.contains('⚠')), "old errors fade out");
+    }
+
+    #[test]
+    fn a_ready_update_shows_in_the_footer_when_nothing_else_does() {
+        let mut m = Model::new(std::sync::Arc::default());
+        m.update_ready = Some(semver::Version::new(0, 3, 0));
+        let lines = render(&m, &UiState::default(), WIDTH, 10);
+        let footer = lines.iter().find(|l| l.starts_with('└')).unwrap();
+        assert!(footer.contains("teamdiff 0.3.0 is ready · restart to use it"), "{footer}");
+        m.last_error = Some(("503 Service Unavailable".into(), Instant::now()));
+        let lines = render(&m, &UiState::default(), WIDTH, 10);
+        let footer = lines.iter().find(|l| l.starts_with('└')).unwrap();
+        assert!(footer.contains("⚠ 503") && !footer.contains("restart"), "an error shows first: {footer}");
     }
 
     #[test]

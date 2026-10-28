@@ -191,6 +191,8 @@ pub struct Model {
     /// The latest request failure and when it happened; shown briefly in the footer.
     pub last_error: Option<(String, Instant)>,
     pub net: Option<Arc<NetStats>>,
+    /// A newer version that replaced this exe and runs the next time teamdiff starts.
+    pub update_ready: Option<semver::Version>,
 }
 
 impl Model {
@@ -210,6 +212,7 @@ impl Model {
             match_parties: HashMap::new(),
             last_error: None,
             net: None,
+            update_ready: None,
         }
     }
 

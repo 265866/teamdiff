@@ -1,5 +1,5 @@
-# cargo-about writes THIRD-PARTY-LICENSES.html for release builds from about.hbs. A dependency under a
-# license missing here fails the release build until someone checks the license allows shipping it.
+# cargo-about writes the license notices the release build embeds in the exe, from about.hbs. A dependency
+# under a license missing here fails the release build until someone checks the license allows shipping it.
 accepted = [
     "Apache-2.0",
     "BSD-3-Clause",

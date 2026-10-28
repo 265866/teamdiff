@@ -28,6 +28,7 @@ on:
       - about.hbs
       - about.toml
       - assets/**
+      - build.rs
       - rust-toolchain.toml
 
 permissions:
@@ -59,7 +60,22 @@ jobs:
         with:
           tool: cargo-about@0.9.2
 
+      # A clarification in about.toml that no longer applies, such as a license file whose checksum
+      # changed, is only logged, and a clean run logs nothing. So any output fails the step.
+      - name: Write the license notices
+        shell: bash
+        run: |
+          status=0
+          cargo about generate --locked --fail about.hbs -o "$RUNNER_TEMP/THIRD-PARTY-LICENSES.txt" 2> "$RUNNER_TEMP/about.log" || status=$?
+          cat "$RUNNER_TEMP/about.log" >&2
+          [ "$status" -eq 0 ] && [ ! -s "$RUNNER_TEMP/about.log" ]
+
+      # The exe carries the notices, which `teamdiff --licenses` prints (see build.rs). Only a release,
+      # which passes a ref, makes an exe that updates itself (see src/update.rs); a test build doesn't.
       - run: cargo build --release --locked
+        env:
+          TEAMDIFF_LICENSES: ${{ runner.temp }}\THIRD-PARTY-LICENSES.txt
+          TEAMDIFF_RELEASE_BUILD: ${{ inputs.ref && '1' || '' }}
 
       - name: Check the exe runs without the Visual C++ runtime
         run: |
@@ -67,16 +83,6 @@ jobs:
           if ([Text.Encoding]::ASCII.GetString($exe).Contains('VCRUNTIME140')) {
             throw 'teamdiff.exe imports VCRUNTIME140.dll, so +crt-static from .cargo/config.toml was not applied.'
           }
-
-      # A clarification in about.toml that no longer applies, such as a license file whose checksum
-      # changed, is only logged, and a clean run logs nothing. So any output fails the step.
-      - name: Write the license notices
-        shell: bash
-        run: |
-          status=0
-          cargo about generate --locked --fail about.hbs -o target/release/THIRD-PARTY-LICENSES.html 2> "$RUNNER_TEMP/about.log" || status=$?
-          cat "$RUNNER_TEMP/about.log" >&2
-          [ "$status" -eq 0 ] && [ ! -s "$RUNNER_TEMP/about.log" ]
 
       - name: Read the version
         id: version
@@ -92,10 +98,13 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           $staging = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP\teamdiff-$env:VERSION"
-          Copy-Item target\release\teamdiff.exe, target\release\THIRD-PARTY-LICENSES.html $staging
+          Copy-Item target\release\teamdiff.exe $staging
           Copy-Item LICENSE-MIT (Join-Path $staging 'LICENSE-MIT.txt')
           Copy-Item LICENSE-APACHE (Join-Path $staging 'LICENSE-APACHE.txt')
           Compress-Archive -Path "$staging\*" -DestinationPath "dist\teamdiff-$env:VERSION-x64.zip"
+          # The updater downloads the bare exe, under a name that holds the version so its attestation
+          # can't pass for another release's.
+          Copy-Item target\release\teamdiff.exe "dist\teamdiff-$env:VERSION-x64.exe"
           # sha256sum -c rejects lines that end in CR, so join with LF only.
           $sums = Get-ChildItem dist -File | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)`n"
