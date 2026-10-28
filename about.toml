@@ -1,0 +1,13 @@
+# cargo-about writes THIRD-PARTY-LICENSES.html for release builds from about.hbs. A dependency under a
+# license missing here fails the release build until someone checks the license allows shipping it.
+accepted = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+targets = ["x86_64-pc-windows-msvc"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

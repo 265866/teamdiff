@@ -1,0 +1,14 @@
+# Groups GitHub's generated release notes. .github/workflows/pr-labels.yml labels pull requests from
+# their Conventional Commit titles.
+changelog:
+  exclude:
+    labels: [release]
+  categories:
+    - title: Breaking changes
+      labels: [breaking]
+    - title: Features
+      labels: [feature]
+    - title: Fixes
+      labels: [fix]
+    - title: Other changes
+      labels: ["*"]

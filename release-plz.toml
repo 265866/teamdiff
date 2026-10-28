@@ -1,0 +1,35 @@
+# release-plz keeps a release pull request open that bumps the version and updates CHANGELOG.md from
+# the Conventional Commits on main. Merging it tags the release; .github/workflows/release.yml then
+# builds it and publishes the GitHub release with its files.
+[workspace]
+# Versions come from v* tags, and nothing is published to crates.io.
+git_only = true
+semver_check = false
+# Before 1.0, a feat commit moves 0.1 to 0.2 rather than 0.1.0 to 0.1.1.
+features_always_increment_minor = true
+release_always = false
+pr_labels = ["release"]
+# The title is also the release commit's subject, which CI checks like every other.
+pr_name = "chore(release): v{{ version }}"
+git_tag_name = "v{{ version }}"
+# The release workflow creates the GitHub release once its files are built.
+git_release_enable = false
+
+[changelog]
+# main takes merge commits, so most commits don't name their pull request. remote.pr_number makes
+# release-plz look each one up on GitHub, so every entry links to the pull request that merged it.
+body = """
+
+## [{{ version }}]{%- if release_link -%}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+
+{% for commit in commits %}
+{%- if commit.scope -%}
+- *({{commit.scope}})* {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}{% if commit.remote.pr_number %} ([#{{ commit.remote.pr_number }}]({{ remote.link }}/pull/{{ commit.remote.pr_number }})){% endif %}
+{% else -%}
+- {% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message }}{% if commit.remote.pr_number %} ([#{{ commit.remote.pr_number }}]({{ remote.link }}/pull/{{ commit.remote.pr_number }})){% endif %}
+{% endif -%}
+{% endfor -%}
+{% endfor -%}
+"""
