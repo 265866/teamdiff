@@ -68,7 +68,7 @@ To ship:
 3. Merge it once its checks pass. Don't merge another pull request until the **Release** workflow's
    **Tag** job has finished, or release-plz may propose the same version again.
 
-The **Release** workflow then tags `vX.Y.Z`, builds the zip from the tag, attests it, and
+The **Release** workflow then tags `vX.Y.Z`, builds the exe and zip from the tag, attests them, and
 publishes the GitHub release with the files. If building or publishing fails, re-run the failed jobs.
 They pick up from the same tag.
 
@@ -90,8 +90,8 @@ an update only when all of these hold:
 Changing any of these, such as renaming the workflow, the repository or the exe, makes every copy
 out there stop updating without telling anyone.
 
-Only a build with `TEAMDIFF_RELEASE_BUILD` set while it compiles updates itself, and the release build
-sets it. Builds you make with `cargo` never update.
+Only a build with `TEAMDIFF_RELEASE_BUILD` set to `1` while it compiles updates itself, and only the
+release workflow's build sets it. Builds you make with `cargo` never update.
 
 `sigstore-verify` is pinned to an exact version, and its trusted Sigstore keys are built into
 teamdiff. Update it when a new version comes out, so releases keep up with any change Sigstore makes

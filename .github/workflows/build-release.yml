@@ -70,10 +70,12 @@ jobs:
           cat "$RUNNER_TEMP/about.log" >&2
           [ "$status" -eq 0 ] && [ ! -s "$RUNNER_TEMP/about.log" ]
 
-      # The exe carries the notices, which `teamdiff --licenses` prints; see build.rs.
+      # The exe carries the notices, which `teamdiff --licenses` prints (see build.rs). Only a release,
+      # which passes a ref, makes an exe that updates itself (see src/update.rs); a test build doesn't.
       - run: cargo build --release --locked
         env:
           TEAMDIFF_LICENSES: ${{ runner.temp }}\THIRD-PARTY-LICENSES.txt
+          TEAMDIFF_RELEASE_BUILD: ${{ inputs.ref && '1' || '' }}
 
       - name: Check the exe runs without the Visual C++ runtime
         run: |
@@ -100,6 +102,9 @@ jobs:
           Copy-Item LICENSE-MIT (Join-Path $staging 'LICENSE-MIT.txt')
           Copy-Item LICENSE-APACHE (Join-Path $staging 'LICENSE-APACHE.txt')
           Compress-Archive -Path "$staging\*" -DestinationPath "dist\teamdiff-$env:VERSION-x64.zip"
+          # The updater downloads the bare exe, under a name that holds the version so its attestation
+          # can't pass for another release's.
+          Copy-Item target\release\teamdiff.exe "dist\teamdiff-$env:VERSION-x64.exe"
           # sha256sum -c rejects lines that end in CR, so join with LF only.
           $sums = Get-ChildItem dist -File | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)`n"
