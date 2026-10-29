@@ -136,9 +136,13 @@ async fn main() -> Result<()> {
         Mode::Live { .. } => Model::new(Arc::default()),
     }));
     if let Mode::Live { dump } = &mode {
-        // Runs even with --no-update, so an exe replaced by hand also says it was updated.
+        // Runs even with --no-update, so an exe replaced by hand also says it was updated, and an update's leftovers still go.
         if update::enabled() {
+            // Before the leftovers go: with no version record, an exe an update moved aside is what shows it was updated.
             controller::lock(&shared).updated = update::updated();
+            if let Ok(exe) = std::env::current_exe() {
+                update::remove_replaced(&exe);
+            }
         }
         tokio::spawn(controller::run(shared.clone(), dump.clone()));
         if update && update::enabled() {
