@@ -18,7 +18,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use model::Model;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use ui::{UiState, View};
 
 const HELP: &str = concat!(
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
         // Runs even with --no-update, so an exe replaced by hand also says it was updated, and an update's leftovers still go.
         if update::enabled() {
             // Before the leftovers go: with no version record, an exe an update moved aside is what shows it was updated.
-            controller::lock(&shared).updated = update::updated();
+            controller::lock(&shared).updated = update::updated().map(|version| (version, Instant::now()));
             if let Ok(exe) = std::env::current_exe() {
                 update::remove_replaced(&exe);
             }
