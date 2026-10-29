@@ -216,6 +216,7 @@ fn keys(pairs: &[(&str, &str)]) -> Vec<Seg> {
 
 const LOADING: &str = "···";
 const ERROR_SHOWN_FOR: std::time::Duration = std::time::Duration::from_secs(15);
+const UPDATED_SHOWN_FOR: std::time::Duration = std::time::Duration::from_secs(10);
 
 // ---------- UI state ----------
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1137,12 +1138,15 @@ pub fn draw(f: &mut Frame, m: &Model, ui: &UiState, icons: &Icons) {
     let sc = screen(m, ui);
     let status = match &m.last_error {
         Some((e, at)) if at.elapsed() < ERROR_SHOWN_FOR => vec![s("⚠ ", bad()), s(e.chars().take(60).collect::<String>(), bad())],
-        _ => match (net_status(m.net.as_deref()), &m.update_ready) {
-            (net, Some(version)) if net.is_empty() => vec![s(format!("teamdiff {version} is ready · restart to use it"), good())],
-            (net, _) if !net.is_empty() => net,
-            _ => match &m.updated {
-                Some(version) => vec![s(format!("new in {version}: {}", crate::update::RELEASES), good())],
-                None => vec![s(concat!("v", env!("CARGO_PKG_VERSION")), dim())],
+        // Above loading, which the first requests after starting would otherwise show for most of its time.
+        _ => match &m.updated {
+            Some((version, at)) if at.elapsed() < UPDATED_SHOWN_FOR => {
+                vec![s(format!("new in {version}: {}", crate::update::RELEASES), good())]
+            }
+            _ => match (net_status(m.net.as_deref()), &m.update_ready) {
+                (net, _) if !net.is_empty() => net,
+                (_, Some(version)) => vec![s(format!("teamdiff {version} is ready · restart to use it"), good())],
+                (_, None) => vec![s(concat!("v", env!("CARGO_PKG_VERSION")), dim())],
             },
         },
     };
@@ -1272,11 +1276,29 @@ pub mod tests {
     #[test]
     fn after_an_update_the_footer_links_the_release_notes_beside_the_longest_keys() {
         let mut m = crate::demo::model("in-game");
-        m.updated = Some(semver::Version::new(0, 12, 0));
+        m.updated = Some((semver::Version::new(0, 12, 0), Instant::now()));
         let lines = render(&m, &UiState::default(), WIDTH, 40);
         let footer = lines.iter().find(|l| l.starts_with('└')).unwrap();
         assert!(footer.contains("enter details  ? legend  q quit"), "{footer}");
         assert!(footer.contains("new in 0.12.0: https://github.com/265866/teamdiff/releases "), "{footer}");
+    }
+
+    #[test]
+    fn the_release_notes_link_shows_over_loading_then_fades() {
+        let mut m = Model::new(std::sync::Arc::default());
+        let net = crate::riot::NetStats::default();
+        net.started.store(3, Ordering::Relaxed);
+        m.net = Some(std::sync::Arc::new(net));
+        m.update_ready = Some(semver::Version::new(0, 13, 0));
+        let footer = |m: &Model| render(m, &UiState::default(), WIDTH, 10).into_iter().find(|l| l.starts_with('└')).unwrap();
+        m.updated = Some((semver::Version::new(0, 12, 0), Instant::now()));
+        assert!(footer(&m).contains("new in 0.12.0") && !footer(&m).contains("loading"), "{}", footer(&m));
+        m.updated = Some((semver::Version::new(0, 12, 0), Instant::now() - UPDATED_SHOWN_FOR));
+        assert!(footer(&m).contains("loading 0/3") && !footer(&m).contains("new in"), "{}", footer(&m));
+        m.net.as_ref().unwrap().finished.store(3, Ordering::Relaxed);
+        assert!(footer(&m).contains("teamdiff 0.13.0 is ready · restart to use it"), "a ready update stays: {}", footer(&m));
+        m.update_ready = None;
+        assert!(footer(&m).contains(concat!(" v", env!("CARGO_PKG_VERSION"), " ")), "{}", footer(&m));
     }
 
     #[test]
