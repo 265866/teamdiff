@@ -52,7 +52,7 @@ fn current_version() -> Version {
 /// The running version when an older one ran last, or, with no record, when an update moved an exe aside. Records the
 /// running version for next time.
 pub fn updated() -> Option<Version> {
-    let replaced = std::env::current_exe().is_ok_and(|exe| moved_aside(&exe));
+    let replaced = std::env::current_exe().is_ok_and(|exe| moved_aside(&exe).next().is_some());
     updated_since(&crate::local_files::last_version_path()?, &current_version(), replaced)
 }
 
@@ -75,7 +75,6 @@ fn updated_since(record: &Path, current: &Version, replaced: bool) -> Option<Ver
 /// Installs each newer release as it comes out, and says so in the footer once one is in place.
 pub async fn run(shared: Shared) {
     let Ok(exe) = std::env::current_exe() else { return };
-    remove_replaced(&exe);
     let current = current_version();
     // No limit on the whole download, so a slow connection still finishes one; only a stalled one gives up.
     let client = reqwest::Client::builder()
@@ -108,6 +107,11 @@ pub async fn run(shared: Shared) {
             }
         }
         tokio::time::sleep(CHECK_EVERY).await;
+        // A teamdiff still running from an exe an update moved aside kept it at startup, and may have closed since. Downloads
+        // stay: one may be another teamdiff's, still being written.
+        for old in moved_aside(&exe) {
+            let _ = std::fs::remove_file(old);
+        }
     }
 }
 
@@ -243,13 +247,14 @@ fn left_by_updates(exe: &Path) -> Vec<PathBuf> {
     entries.flatten().filter(|e| e.file_name().to_str().and_then(left) == Some(true)).map(|e| e.path()).collect()
 }
 
-/// Whether an update moved an exe aside beside `exe`, which only a finished update does.
-fn moved_aside(exe: &Path) -> bool {
-    left_by_updates(exe).iter().any(|f| f.extension().is_some_and(|e| e == "old"))
+/// The exes updates moved aside beside `exe`, which only a finished update does.
+fn moved_aside(exe: &Path) -> impl Iterator<Item = PathBuf> {
+    left_by_updates(exe).into_iter().filter(|f| f.extension().is_some_and(|e| e == "old"))
 }
 
-/// Deletes [`left_by_updates`]. Windows refuses to delete an exe a teamdiff still runs from, so that one goes on a later start.
-fn remove_replaced(exe: &Path) {
+/// Deletes [`left_by_updates`]. Windows refuses to delete an exe a teamdiff still runs from, so that one goes on a later check
+/// or start.
+pub fn remove_replaced(exe: &Path) {
     for file in left_by_updates(exe) {
         let _ = std::fs::remove_file(file);
     }
@@ -414,9 +419,9 @@ mod tests {
         for name in ["teamdiff.exe", "teamdiff.exe.12.new", "teamdiff.exe.old", "other.exe.34.old"] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
-        assert!(!moved_aside(&exe), "a download left unfinished isn't an update");
+        assert_eq!(moved_aside(&exe).count(), 0, "a download left unfinished isn't an update");
         std::fs::write(dir.join("teamdiff.exe.34.old"), b"x").unwrap();
-        assert!(moved_aside(&exe));
+        assert_eq!(moved_aside(&exe).collect::<Vec<_>>(), [dir.join("teamdiff.exe.34.old")]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
