@@ -21,6 +21,9 @@ const DOWNLOADS: &str = "https://github.com/265866/teamdiff/releases/download";
 /// The release workflow attaches it to every release.
 const ATTESTATION: &str = "attestation.json";
 const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
+/// How long since a download (`.new`) was last written before it counts as left by a teamdiff that stopped, rather than one
+/// still writing it.
+const DOWNLOAD_ABANDONED_AFTER: Duration = Duration::from_secs(60 * 60);
 
 /// Who must have built an exe for teamdiff to run it.
 struct Builder {
@@ -253,10 +256,17 @@ fn moved_aside(exe: &Path) -> impl Iterator<Item = PathBuf> {
 }
 
 /// Deletes [`left_by_updates`]. Windows refuses to delete an exe a teamdiff still runs from, so that one goes on a later check
-/// or start.
+/// or start, and a download written in the last [`DOWNLOAD_ABANDONED_AFTER`] goes on a later start.
 pub fn remove_replaced(exe: &Path) {
     for file in left_by_updates(exe) {
-        let _ = std::fs::remove_file(file);
+        let downloading = file.extension().is_some_and(|e| e == "new")
+            && std::fs::metadata(&file).and_then(|m| m.modified()).is_ok_and(|written| {
+                // A time ahead of the clock, as after the clock was set back, counts as just written.
+                written.elapsed().map_or(true, |age| age < DOWNLOAD_ABANDONED_AFTER)
+            });
+        if !downloading {
+            let _ = std::fs::remove_file(file);
+        }
     }
 }
 
@@ -440,8 +450,27 @@ mod tests {
         for name in names {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
+        abandon(&dir.join("teamdiff.exe.34.new"));
         remove_replaced(&dir.join("teamdiff.exe"));
         assert_eq!(files(&dir), ["notes.txt", "other.exe.12.old", "teamdiff.exe", "teamdiff.exe.old", "teamdiff.exe.x1.old"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Dates `file` back to before [`DOWNLOAD_ABANDONED_AFTER`].
+    fn abandon(file: &Path) {
+        let written = std::time::SystemTime::now() - DOWNLOAD_ABANDONED_AFTER - Duration::from_secs(60);
+        std::fs::File::options().write(true).open(file).unwrap().set_modified(written).unwrap();
+    }
+
+    #[test]
+    fn keeps_a_download_another_teamdiff_may_still_be_writing() {
+        let dir = temp_dir("downloading");
+        for name in ["teamdiff.exe", "teamdiff.exe.12.new", "teamdiff.exe.34.new"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        abandon(&dir.join("teamdiff.exe.34.new"));
+        remove_replaced(&dir.join("teamdiff.exe"));
+        assert_eq!(files(&dir), ["teamdiff.exe", "teamdiff.exe.12.new"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
