@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/265866/teamdiff/compare/v0.2.0...v0.2.1) - 2026-10-29
+
+### Fixed
+
+- *(update)* keep a download another teamdiff may still be writing ([#22](https://github.com/265866/teamdiff/pull/22))
+- *(ui)* hide the release notes link 10 seconds after an update ([#20](https://github.com/265866/teamdiff/pull/20))
+- *(update)* remove an update's leftovers even with --no-update ([#19](https://github.com/265866/teamdiff/pull/19))
+
 ## [0.2.0](https://github.com/265866/teamdiff/compare/v0.1.0...v0.2.0) - 2026-10-28
 
 ### Added
