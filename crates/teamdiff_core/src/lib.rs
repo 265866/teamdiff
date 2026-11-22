@@ -2,6 +2,7 @@
 //! runtime dependencies stay out of it.
 
 mod cast;
+pub mod command_line;
 pub mod content;
 pub mod demo;
 pub mod goldstars;
