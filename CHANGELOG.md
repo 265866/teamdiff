@@ -28,6 +28,16 @@ built there. It refuses this one: the footer shows
 
 From then on teamdiff updates itself from this repository again.
 
+### Added
+
+- *(core)* port the game content, accolades, presence, stats and local files ([#5](https://github.com/265866/teamdiff/pull/5))
+- *(core)* port the tracker.gg parsing, model, demo and command line ([#6](https://github.com/265866/teamdiff/pull/6))
+- *(ui)* port the terminal UI ([#8](https://github.com/265866/teamdiff/pull/8))
+- *(core)* turn the HTML license notices into the text --licenses prints ([#9](https://github.com/265866/teamdiff/pull/9))
+- *(browser)* port the hidden WebView2 browser ([#10](https://github.com/265866/teamdiff/pull/10))
+- *(live)* port the Riot and tracker.gg clients, the controller and the updater ([#12](https://github.com/265866/teamdiff/pull/12))
+- wire the binary: the command line, the controller, the updater and the UI ([#14](https://github.com/265866/teamdiff/pull/14))
+
 ### Changed
 
 - A panic now closes teamdiff at once instead of leaving the screen running without updates.
@@ -39,3 +49,15 @@ From then on teamdiff updates itself from this repository again.
 ### Fixed
 
 - `url` 2.5.9, for RUSTSEC-2026-0592: a stack overflow on nested `blob:` URLs.
+
+### Other
+
+- *(privacy)* check the repository for personal data ([#3](https://github.com/265866/teamdiff/pull/3))
+- allow the browser, ui and live crates ([#4](https://github.com/265866/teamdiff/pull/4))
+- update trellis to v0.15.1 ([#7](https://github.com/265866/teamdiff/pull/7))
+- embed the license notices and let WebView2 tests take turns ([#11](https://github.com/265866/teamdiff/pull/11))
+- update trellis to v0.16.0 and name the release files as before ([#13](https://github.com/265866/teamdiff/pull/13))
+- bring back the guide, the privacy rules and the Riot notice ([#15](https://github.com/265866/teamdiff/pull/15))
+- *(browser)* give the refused-page test the full request timeout ([#16](https://github.com/265866/teamdiff/pull/16))
+- update trellis to v0.16.1 and name 265866 as the copyright holder ([#17](https://github.com/265866/teamdiff/pull/17))
+- generate from trellis
