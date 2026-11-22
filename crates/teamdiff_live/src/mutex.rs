@@ -1,14 +1,16 @@
 //! Locking the small mutexes the clients keep their state in.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
-/// Locks `mutex`, handing out its value as a panicking holder left it, as teamdiff 0.2.1 did.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "release builds abort on a panic, so only a debug build or a test sees a poisoned \
-              lock; each holder of these makes one change that can't stop halfway, such as \
-              setting a deadline or adding an id to a set, so what a panic left is still valid"
-)]
+/// Locks `mutex`.
+///
+/// # Panics
+///
+/// When a thread panicked while it held the lock. A release build aborts the process on a panic,
+/// so there no lock is ever poisoned and this never panics, as with the model's lock in
+/// `teamdiff_core::shared`.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    mutex
+        .lock()
+        .expect("a thread panicked while it held a client's lock")
 }

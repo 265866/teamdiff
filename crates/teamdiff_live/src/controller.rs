@@ -386,7 +386,8 @@ impl Session {
         }
     }
 
-    /// Shows `lobby` and, in a competitive match, loads everyone in it who isn't incognito.
+    /// Shows `lobby` and, in a competitive match, loads everyone in it who isn't incognito. You're
+    /// never hidden from yourself, so your own row loads even when you play incognito.
     fn show_lobby(&mut self, phase: Phase, lobby: Lobby) {
         let competitive = lobby.is_competitive();
         let named: Vec<String> = lobby
@@ -639,6 +640,10 @@ fn update(shared: &Shared, puuid: &str, f: impl FnOnce(&mut PlayerData)) {
 /// Rank, act record, map records and recent matches for one player from tracker.gg. A player
 /// tracker.gg doesn't know, or whose profile is private, is shown as such and not asked about again;
 /// any other failure is returned so the load is retried.
+///
+/// A profile shared only partly, tracker.gg's "premier" privacy, loads without stats, and its other
+/// pages are refused, so it counts as private. Map records are asked for only when the player has
+/// a game this act, since without one there are none.
 async fn load_player<T: Transport>(
     tracker: &Tracker<T>,
     shared: &Shared,

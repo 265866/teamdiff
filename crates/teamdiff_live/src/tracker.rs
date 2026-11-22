@@ -230,7 +230,9 @@ impl<T: Transport> Tracker<T> {
         self.get_trimmed(path, None).await
     }
 
-    /// `get`, with the body cut down in the page by the JavaScript function `trim`.
+    /// `get`, with the body cut down in the page by the JavaScript function `trim`. A trimmed
+    /// answer is never dumped: trimming is how match pages, which name incognito players, are
+    /// asked for.
     async fn get_trimmed(&self, path: &str, trim: Option<&'static str>) -> Result<Option<Value>> {
         let _permit = self.permits.acquire().await?;
         let paused = *mutex::lock(&self.paused);
@@ -259,7 +261,13 @@ impl<T: Transport> Tracker<T> {
     }
 
     /// Sends the request, waiting out a short `Retry-After` and reloading the page once after a
-    /// refusal. Match pages, which name incognito players, are trimmed and so never dumped.
+    /// refusal.
+    ///
+    /// Only the seconds form of `Retry-After` is read; an HTTP date counts as no header. It is
+    /// capped at a day, so an absurd value can't overflow the deadline. A 503 is retried here only
+    /// when the server says when; otherwise the caller retries later. Cloudflare's block page is a
+    /// 403, or status 0 when the page can't read it because it carries no CORS headers; loading
+    /// the page again lets Cloudflare check the browser, which can lift the block.
     async fn get_with_retry(
         &self,
         path: &str,
@@ -608,7 +616,7 @@ pub(crate) mod tests {
         });
     }
 
-    /// The tests that start WebView2, which `.config/nextest.toml` runs one at a time.
+    /// The tests that start `WebView2`, which `.config/nextest.toml` runs one at a time.
     mod webview2 {
         use super::*;
 

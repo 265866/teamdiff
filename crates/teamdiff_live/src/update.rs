@@ -120,6 +120,11 @@ fn record_version(record: &Path, version: &Version) {
 }
 
 /// Installs each newer release as it comes out, and says so in the footer once one is in place.
+///
+/// A download has no time limit as a whole, so a slow connection still finishes one; only a
+/// stalled one gives up. Each hourly check also deletes exes an update moved aside, which a
+/// teamdiff still running from them kept at startup, but never downloads: one may be another
+/// teamdiff's, still being written.
 pub async fn run(shared: Shared) {
     let Ok(exe) = env::current_exe() else { return };
     let current = current_version();
@@ -259,6 +264,8 @@ fn exe_name(version: &Version) -> String {
 }
 
 /// Checks that `attestation` shows `builder` built the file named `file_name` whose SHA-256 is `digest`.
+/// The signature covers every file the release built, so the name matters too: the download must
+/// be the exe of the version asked for, not another file or an older release's exe.
 fn verify(
     attestation: &str,
     digest: &Sha256Hash,
@@ -354,8 +361,9 @@ fn put_back(old: &Path, exe: &Path) {
 #[expect(
     clippy::let_underscore_must_use,
     let_underscore_drop,
-    reason = "Windows refuses to delete an exe a teamdiff still runs from, and a later check or \
-              start's remove_replaced deletes whatever stays"
+    reason = "nothing is left to try when a delete fails: Windows refuses to delete an exe a \
+              teamdiff still runs from, and a later check or start's remove_replaced deletes \
+              that, or a download a failed update left, once it has sat for an hour"
 )]
 fn remove_left(file: &Path) {
     let _ = fs::remove_file(file);
@@ -393,7 +401,8 @@ fn moved_aside(exe: &Path) -> impl Iterator<Item = PathBuf> {
 /// Deletes what updates left beside `exe`: exes they moved aside and downloads they didn't
 /// finish. Windows refuses to delete an exe a teamdiff still runs from, so that one goes on a
 /// later check or start, and a download written in the last hour may be another teamdiff's,
-/// still being written, so it goes on a later start.
+/// still being written, so it goes on a later start. A download dated ahead of the clock, as
+/// after the clock was set back, counts as just written.
 pub fn remove_replaced(exe: &Path) {
     for file in left_by_updates(exe) {
         let downloading = file.extension().is_some_and(|e| e == "new")

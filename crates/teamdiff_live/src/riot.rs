@@ -104,6 +104,9 @@ pub(crate) struct Riot {
 }
 
 /// Connects to the running Riot Client. Fails when the client isn't running or isn't signed in.
+///
+/// The local API serves a self-signed certificate on 127.0.0.1, so only the client for it skips
+/// certificate checks; the one for the game servers checks them.
 pub(crate) async fn connect(dump_dir: Option<PathBuf>) -> Result<Riot> {
     let lock_path =
         local_files::lockfile_path().ok_or_else(|| anyhow!("LOCALAPPDATA is not set"))?;
@@ -251,6 +254,9 @@ impl Riot {
     /// 429 isn't waited out here: waiting would hold up everything else, such as noticing that
     /// the match started, so the caller asks again on its own schedule and the footer counts the
     /// wait down.
+    ///
+    /// A failed request's error drops reqwest's URL, which can hold player ids, and names only the
+    /// path, since errors reach the footer.
     async fn send_with_retry(
         &self,
         method: Method,
@@ -590,8 +596,16 @@ mod tests {
 
         let json = STANDARD.decode(client_platform()).unwrap();
         let v: Value = serde_json::from_slice(&json).unwrap();
-        assert_eq!(v["platformType"], "PC");
-        assert_eq!(v["platformOS"], "Windows");
+        assert_eq!(
+            v,
+            json!({
+                "platformType": "PC",
+                "platformOS": "Windows",
+                "platformOSVersion": "10.0.19042.1.256.64bit",
+                "platformChipset": "Unknown",
+            }),
+            "every field is the one the Windows Riot Client sends"
+        );
     }
 
     #[test]
