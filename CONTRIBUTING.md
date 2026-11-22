@@ -17,6 +17,9 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | --- | --- |
 | `crates/teamdiff` | The program: `main.rs` starts it and wires the parts together. No logic that a test would want to call. `teamdiff --version` prints the version line and exits 0. `tests/command_line.rs` runs the built binary and checks it. |
 | `crates/teamdiff_core` | The logic. A crate of its own keeps the binary's command-line and runtime dependencies out of it, lets `just docs` check the doc comments of both crates, and gives `internal_dependencies` its first edge: the binary depends on the logic, never the reverse. |
+| `crates/teamdiff_browser` | The hidden WebView2 browser that fetches tracker.gg pages. It is the one crate allowed unsafe code, since WebView2's COM API has only unsafe bindings, so the unsafe calls stay out of every other crate. |
+| `crates/teamdiff_ui` | The terminal UI: drawing each screen with ratatui and the accolade icons. It reads the model from `teamdiff_core` and makes no requests. |
+| `crates/teamdiff_live` | Everything that talks to the outside: the Riot Client's local API, tracker.gg through `teamdiff_browser`, the controller that keeps the model current, and the self-updater. |
 
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 

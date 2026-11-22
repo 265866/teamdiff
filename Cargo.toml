@@ -41,8 +41,18 @@ readme_sections = ["Install", "Documentation", "License"]
 # crates, is a rule change.
 [workspace.metadata.policy.internal_dependencies]
 teamdiff_core = []
+teamdiff_browser = []
+teamdiff_ui = [
+    "teamdiff_core",
+]
+teamdiff_live = [
+    "teamdiff_browser",
+    "teamdiff_core",
+]
 teamdiff = [
     "teamdiff_core",
+    "teamdiff_live",
+    "teamdiff_ui",
 ]
 
 [workspace.package]
