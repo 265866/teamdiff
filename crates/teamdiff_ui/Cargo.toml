@@ -1,0 +1,21 @@
+[package]
+name = "teamdiff_ui"
+description = "The terminal UI of teamdiff: each screen drawn with ratatui, and the accolade icons"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+crossterm = "0.29.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+jiff = { version = "1.0.2", default-features = false, features = ["std"] }
+ratatui = "0.30.2"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
+teamdiff_core = { path = "../teamdiff_core" }
+unicode-width = "0.2.2"
+
+[lints]
+workspace = true

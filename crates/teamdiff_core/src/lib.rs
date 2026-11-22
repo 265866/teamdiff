@@ -11,6 +11,7 @@ pub mod model;
 pub mod net_stats;
 pub mod notices;
 pub mod presence;
+pub mod shared;
 pub mod stats;
 pub mod tracker;
 mod version_line;
