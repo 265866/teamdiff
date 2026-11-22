@@ -4,6 +4,7 @@
 mod cast;
 pub mod content;
 pub mod goldstars;
+pub mod local_files;
 pub mod presence;
 pub mod stats;
 mod version_line;
