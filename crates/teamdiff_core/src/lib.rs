@@ -3,6 +3,7 @@
 
 mod cast;
 pub mod content;
+pub mod goldstars;
 mod version_line;
 
 pub use version_line::version_line;
