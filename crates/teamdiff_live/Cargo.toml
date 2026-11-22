@@ -1,0 +1,27 @@
+[package]
+name = "teamdiff_live"
+description = "Everything teamdiff says to the outside: the Riot Client, tracker.gg and its own updates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+jiff = { version = "1.0.2", default-features = false, features = ["std"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+semver = "1.0.28"
+serde_json = "1.0.154"
+sigstore-verify = { version = "=0.15.1", default-features = false, features = ["aws-lc-rs"] }
+teamdiff_browser = { path = "../teamdiff_browser" }
+teamdiff_core = { path = "../teamdiff_core" }
+tokio = { version = "1.53.3", features = ["rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true
