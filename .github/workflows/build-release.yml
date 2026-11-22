@@ -22,6 +22,7 @@ on:
       - about.toml
       - crates/*/Cargo.toml
       - crates/*/build.rs
+      - release/**
       - rust-toolchain.toml
 
 permissions:
@@ -41,6 +42,7 @@ jobs:
         include:
           - os: windows-2025
             target: x86_64-pc-windows-msvc
+            files: teamdiff-{version}-x64.zip teamdiff-{version}-x64.exe
     defaults:
       run:
         shell: bash
@@ -68,6 +70,9 @@ jobs:
       - name: Build
         env:
           TARGET: ${{ matrix.target }}
+          # The release's own build settings, from the release answer.
+          TEAMDIFF_LICENSES: "${{ github.workspace }}/target/THIRD-PARTY-LICENSES.html"
+          TEAMDIFF_RELEASE_BUILD: "${{ inputs.ref && '1' || '' }}"
         run: cargo build --locked --release --package teamdiff --target "$TARGET"
 
       - name: Check the exe runs without the Visual C++ runtime
@@ -81,27 +86,49 @@ jobs:
             throw 'teamdiff.exe imports VCRUNTIME140.dll, so +crt-static from .cargo/config.toml was not applied.'
           }
 
-      - name: Archive
+      # release/package.sh writes this target's release files, the ones the release answer names,
+      # to DIST, and nothing else: every file there is attested and published, under the name the
+      # answer gives, and docs/install.md lists them. docs/maintaining.md says what it gets.
+      - name: Package
         id: archive
         env:
           TARGET: ${{ matrix.target }}
+          FILES: ${{ matrix.files }}
           NAME: teamdiff
           PACKAGE: teamdiff
         run: |
           version=$(cargo metadata --locked --no-deps --format-version 1 \
             | jq -r --arg name "$PACKAGE" '.packages[] | select(.name == $name) | .version')
-          stem="$NAME-$version-$TARGET"
-          mkdir -p "dist/$stem"
-          cp LICENSE-MIT LICENSE-APACHE README.md target/THIRD-PARTY-LICENSES.html "dist/$stem/"
-          if [ "$RUNNER_OS" = Windows ]; then
-            cp "target/$TARGET/release/$NAME.exe" "dist/$stem/"
-            (cd dist && 7z a -tzip "$stem.zip" "$stem" > /dev/null)
-          else
-            cp "target/$TARGET/release/$NAME" "dist/$stem/"
-            tar -C dist -czf "dist/$stem.tar.gz" "$stem"
+          binary="target/$TARGET/release/$NAME"
+          if [ "$RUNNER_OS" = Windows ]; then binary="$binary.exe"; fi
+          export VERSION="$version" BINARY="$binary" NOTICES=target/THIRD-PARTY-LICENSES.html
+          export DIST="$PWD/target/release-files"
+          if [ -z "$FILES" ]; then
+            echo "::error::The release answer in .copier-answers.yml names no files for $TARGET; add them as docs/maintaining.md says."
+            exit 1
           fi
-          rm -r "dist/$stem"
-          echo "artifact=$stem" >> "$GITHUB_OUTPUT"
+          rm -rf "$DIST" dist
+          mkdir -p "$DIST"
+          bash -eo pipefail release/package.sh
+          if [ -e dist ]; then
+            echo "::error::release/package.sh wrote dist/, which the release publishes whole; write only to \$DIST."
+            exit 1
+          fi
+          expected=$(for file in $FILES; do echo "${file//\{version\}/$version}"; done | sort)
+          written=$(cd "$DIST" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | sort)
+          if [ "$written" != "$expected" ]; then
+            echo "::error::release/package.sh must write exactly the files the release answer names for $TARGET to \$DIST: $(tr '\n' ' ' <<< "$expected"). It wrote: $(tr '\n' ' ' <<< "$written")."
+            exit 1
+          fi
+          for file in $expected; do
+            if [ ! -f "$DIST/$file" ] || [ -L "$DIST/$file" ] || [ ! -s "$DIST/$file" ]; then
+              echo "::error::release/package.sh wrote $file as something other than a regular file with contents."
+              exit 1
+            fi
+          done
+          mkdir -p dist
+          mv "$DIST"/* dist/
+          echo "artifact=$NAME-$version-$TARGET" >> "$GITHUB_OUTPUT"
 
       # A week is long enough to re-run a failed publish job, and keeps the archives from filling a
       # private repository's storage.

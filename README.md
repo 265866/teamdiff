@@ -7,9 +7,9 @@ A terminal companion for VALORANT on Windows: your lobby's ranks, records and re
 
 ## Install
 
-Download the archive for your platform from the
-[latest release](https://github.com/265866/teamdiff/releases/latest), check it
-as [Verify a release](docs/verifying-releases.md) shows, and unpack it.
+Download the files for your platform from the
+[latest release](https://github.com/265866/teamdiff/releases/latest), check them
+as [Verify a release](docs/verifying-releases.md) shows, and install them.
 [Install](docs/install.md) has the details.
 
 ## Documentation
@@ -28,5 +28,3 @@ as [Verify a release](docs/verifying-releases.md) shows, and unpack it.
 
 Released under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at
 your option.
-Each release archive holds `THIRD-PARTY-LICENSES.html`, the licenses of the crates it is built
-with.

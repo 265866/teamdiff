@@ -20,6 +20,7 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | `crates/teamdiff_browser` | The hidden WebView2 browser that keeps a tracker.gg page loaded and makes tracker.gg's API requests from it. WebView2 and the Win32 window that hosts it have only unsafe bindings, so this is the one crate `dylint.toml` allows unsafe code, which keeps it out of every other crate. |
 | `crates/teamdiff_ui` | The terminal UI: draws each screen with ratatui, accolade icons included. It reads the model from `teamdiff_core` and makes no requests. |
 | `crates/teamdiff_live` | Everything that talks to the outside: the Riot Client's local API and Riot's game services, valorant-api.com, tracker.gg through `teamdiff_browser`, the controller that keeps the model current, and the self-updater, which reads GitHub releases. |
+| `release/package.sh` | Writes each target's release files, the ones `release` in `.copier-answers.yml` names. [docs/maintaining.md](docs/maintaining.md#extend-what-trellis-generates) says what it gets. It is a rule, like the workflows. |
 
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 
@@ -99,7 +100,10 @@ paths, tokens, Riot IDs, UUIDs that aren't public game content, and binary files
 ### Advisories
 
 The Advisories workflow also runs `just deny` every week. A new advisory can fail a pull request
-that changed nothing; fix it with `cargo update -p <crate>` in its own pull request.
+that changed nothing; fix it with `cargo update -p <crate>` in its own pull request. It also runs
+`just stale-licenses`, which fails on an entry in `about.toml` for a crate the dependency graph
+doesn't hold. Unless the code pull request that adds that crate is still open, remove the entry,
+and its exception in `deny.toml`, in a rules pull request.
 
 ## Code
 
@@ -236,6 +240,15 @@ next, or add the rule together with an `expect` and a real reason at each place 
 proc-macro dependency is code: list the crate in `proc_macro_crates` in one pull request, then add
 the dependency and its first use in the next. Run `just rule-changes` to see how your changes
 sort: it counts the rule and code files, and lists both when a change mixes them.
+
+A dependency under a license that `deny.toml` and `about.toml` don't accept lands in two pull
+requests. First, in a rules pull request, accept the license for that crate alone, with the
+reason in a comment: an exception in `deny.toml`, such as `[[licenses.exceptions]]` with
+`crate = "webpki-roots"` and `allow = ["CDLA-Permissive-2.0"]`, and an entry in `about.toml`, such
+as `[webpki-roots]` with `accepted = ["CDLA-Permissive-2.0"]`. `just deny` and `just notices` pass
+with an entry for a crate the dependency graph doesn't hold yet. Then add the dependency in a code
+pull request. Accepting the license for every crate, in `allow` or `accepted`, lets any later
+dependency use it too, so do that only when the owner decides it.
 
 ## License
 

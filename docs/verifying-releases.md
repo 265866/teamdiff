@@ -5,22 +5,22 @@ from its tag and attests where it came from. Check that before you run it.
 
 ## Check the checksum
 
-In the directory with the download and the release's `SHA256SUMS`:
+In the directory with the download and the release's `SHA256SUMS.txt`:
 
 ```sh
-sha256sum --check --ignore-missing SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS.txt
 ```
 
-On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS`. On Windows, run
-`(Get-FileHash <archive>).Hash` in PowerShell and compare it with the archive's line in
-`SHA256SUMS`; the case doesn't matter.
+On macOS, use `shasum -a 256 --check --ignore-missing SHA256SUMS.txt`. On Windows, run
+`(Get-FileHash <file>).Hash` in PowerShell and compare it with the file's line in
+`SHA256SUMS.txt`; the case doesn't matter.
 
 ## Check the attestation
 
 Download the release's `attestation.json` too. Then, with the [GitHub CLI](https://cli.github.com/):
 
 ```sh
-gh attestation verify <archive> --bundle attestation.json \
+gh attestation verify <file> --bundle attestation.json \
   --repo 265866/teamdiff \
   --signer-workflow 265866/teamdiff/.github/workflows/release.yml \
   --source-ref refs/heads/main

@@ -147,6 +147,68 @@ name it too: the root `Cargo.toml`, `dylint.toml`, the release configuration, th
 and the workflows. So renaming it changes rules and code together. To rename it,
 follow "Name and kind" under [Change an answer](#change-an-answer).
 
+## Extend what trellis generates
+
+Each of these is a place trellis leaves to the project, so you never edit a file it generates.
+An update leaves them alone.
+
+- **What the builds need.** The `build` answer, a YAML mapping, changes CI's and the release's
+  builds without an edit to the workflows. `libc: gnu` builds for Linux with glibc instead of
+  musl, for a program that links system libraries such as GTK, WebKitGTK or Vulkan, which musl
+  can't; [Install](install.md) then says which systems the release runs on. `setup: true` runs
+  `.github/setup-build.sh` in CI's build jobs and the release's, on every runner before the
+  build, with the runner's system in `RUNNER_OS` and the target in `TARGET`. trellis writes a
+  starter that installs nothing, and an update never overwrites your version. It can install
+  packages with `sudo apt-get`, free disk space, or download a toolchain component such as
+  Xcode's Metal compiler; a step that fails fails the build, with its output. It is a rule, like
+  the workflows, and `just actionlint` shellchecks it. `timeout` raises those jobs' limit from 60
+  minutes. Set the answer and fill in the script in one rules pull request:
+
+  ```sh
+  uvx copier update --defaults --vcs-ref=:current: --data 'build={libc: gnu, setup: true, timeout: 90}'
+  ```
+
+  The answer replaces the whole mapping, so repeat every key you keep.
+- **Release files.** The `release` answer, a YAML mapping, changes what a release attaches.
+  `files` maps each target triple to the names of its files, with `{version}` for the version,
+  and `release/package.sh`, which you write, writes exactly those files for its target; the
+  release build replaces trellis's archive with them, and the release attests and publishes them
+  with the rest. [Install](install.md), [Verify a release](verifying-releases.md) and
+  [Stability](stability.md) then list those names, so changing one breaks your users as
+  "Keep releases verifiable" says. `checksums` names the checksums file, `name` starts the
+  release's title, and `env` sets environment variables, each a quoted string that may hold a
+  `${{ }}` expression, for the release's `cargo build` only, such as
+  `APP_RELEASE: "${{ inputs.ref && '1' || '' }}"`, which is set only when the release workflow,
+  not a pull request, runs the build. The script runs with bash from the repository's root on
+  each target's runner, Git Bash on Windows, after the build, with these variables:
+
+  | Variable | Holds |
+  | --- | --- |
+  | `TARGET` | The target triple. |
+  | `VERSION` | The version, such as `1.4.2`. |
+  | `BINARY` | The program the release built, relative to the root. |
+  | `NOTICES` | The license notices, `target/THIRD-PARTY-LICENSES.html`, which the build can read too. |
+  | `DIST` | The empty directory, an absolute path, to write the files to. |
+
+  The build fails unless `DIST` then holds exactly the names `files` lists for the target, each a
+  file with contents, and fails for a target `files` doesn't list, so give a new platform's
+  files in the same update that adds it. The script runs with `-e`; it
+  must not write `dist/`, which the release publishes whole. For the build to read the notices,
+  give it their absolute path, such as
+  `APP_LICENSES: "${{ github.workspace }}/target/THIRD-PARTY-LICENSES.html"`; a
+  build script reads a relative path from its crate's directory. Git Bash turns an argument that starts with `/` into a path, so call a
+  Windows program such as Inno Setup's `iscc`, which the windows-2025 runners have, with
+  `MSYS_NO_PATHCONV=1`, and give it paths through `cygpath -w`. The script is a rule, like the
+  workflows, and `just actionlint` shellchecks it. Write it, then set the answer in the same rules
+  pull request:
+
+  ```sh
+  uvx copier update --defaults --vcs-ref=:current: \
+    --data 'release={checksums: SHA256SUMS.txt, files: {x86_64-pc-windows-msvc: ["app-{version}-x64.zip"]}}'
+  ```
+
+  The answer replaces the whole mapping, so repeat every key you keep.
+
 ## Change an answer
 
 To change an answer, keep the trellis version and pass the new value, such as the platforms:
@@ -198,6 +260,14 @@ hold need more than the update, and two can't change this way at all:
   to `none`, also remove `license.workspace = true` from every crate's `Cargo.toml`, in the
   update's pull request; Cargo can't load the workspace until each crate's line is gone.
   A crate's license line is a rule setting, so the pull request stays a rule change.
+- **Web UI.** The update doesn't add the app, so land it first, in a code pull request:
+  `crates/teamdiff/web` with a `package.json` that has `check` and `build` scripts, its
+  `bun.lock` and its sources. Leave out its `tsconfig.json`, and any `.gitignore`, `bunfig.toml`
+  or `.npmrc`, which are rules. Write the `bun.lock` with `bun install --lockfile-only` in the
+  app's directory, and don't run a plain `bun install` or `just web-build` on that branch: until
+  the update merges, `.gitignore` doesn't ignore the app's `node_modules/` and `dist/`, so
+  `just rule-changes` counts what they write. Then run the update with `--data web_ui=true`, and
+  add the app's settings files to its pull request.
 
 The other answers change only files the update writes.
 
