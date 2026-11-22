@@ -9,8 +9,8 @@ use tokio::runtime::Builder;
 use tokio::time;
 
 /// How long each request may take, page load included. A refused page answers only once a request
-/// times out after its load finished, and `WebView2`'s first start on a fresh CI runner can take
-/// most of this, so the refused-page test needs the full time too.
+/// times out after its load finished, so the refused-page test waits the full time; on a fresh CI
+/// runner the first page load took longer than 8 s.
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Runs `test` on a multi-threaded runtime, as the app runs the browser's callers.
