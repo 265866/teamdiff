@@ -464,15 +464,6 @@ pub(crate) mod tests {
             .block_on(test)
     }
 
-    /// Runs `test` on a multi-threaded runtime with the real clock, as the app runs the browser.
-    fn block_on_browser<F: Future>(test: F) -> F::Output {
-        Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("the test runtime should start")
-            .block_on(test)
-    }
-
     #[test]
     fn riot_ids_are_percent_encoded() {
         assert_eq!(riot_id_path("blue berry", "TAG"), "blue%20berry%23TAG");
@@ -617,78 +608,92 @@ pub(crate) mod tests {
         });
     }
 
-    #[test]
-    fn the_browser_closes_only_when_idle_and_reopens_on_demand() {
-        block_on_browser(async {
-            let site = Site::start().await.unwrap();
-            let profile = Profile::try_new("idle-test").unwrap();
-            let transport = BrowserTransport {
-                profile_dir: profile.dir().to_path_buf(),
-                home: format!("{}/", site.page),
-                open: AsyncMutex::default(),
-            };
-            let t = Tracker::with(transport, Arc::default(), None);
-            let open = &t.transport.open;
-            let data = format!("{}/data", site.api);
-            assert_eq!(
-                t.transport.get(&data, None).await.unwrap().status,
-                200,
-                "the first request opens it"
-            );
-            let first = Arc::clone(&open.lock().await.as_ref().unwrap().browser);
-            t.close_if_idle();
-            assert!(open.lock().await.is_some(), "just used");
-            open.lock().await.as_mut().unwrap().used -= IDLE * 2;
-            t.close_if_idle();
-            assert!(open.lock().await.is_some(), "a request is still holding it");
-            drop(first);
-            t.close_if_idle();
-            assert!(open.lock().await.is_none(), "idle and unused");
-            assert_eq!(
-                t.transport.get(&data, None).await.unwrap().status,
-                200,
-                "the next request opens a new one"
-            );
-            assert!(open.lock().await.is_some());
-        });
-    }
+    /// The tests that start WebView2, which `.config/nextest.toml` runs one at a time.
+    mod webview2 {
+        use super::*;
 
-    #[test]
-    fn the_match_trim_keeps_players_teams_and_parties() {
-        block_on_browser(async {
-            let site = Site::start().await.unwrap();
-            let profile = Profile::try_new("trim-test").unwrap();
-            let b = Browser::start(
-                profile.dir(),
-                &format!("{}/", site.page),
-                Duration::from_secs(20),
-            )
-            .unwrap();
-            let trim = Some(MATCH_PLAYERS);
-            let r = b
-                .get_trimmed(&format!("{}/match", site.api), trim)
-                .await
+        /// Runs `test` on a multi-threaded runtime with the real clock, as the app runs the browser.
+        fn block_on_browser<F: Future>(test: F) -> F::Output {
+            Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("the test runtime should start")
+                .block_on(test)
+        }
+
+        #[test]
+        fn the_browser_closes_only_when_idle_and_reopens_on_demand() {
+            block_on_browser(async {
+                let site = Site::start().await.unwrap();
+                let profile = Profile::try_new("idle-test").unwrap();
+                let transport = BrowserTransport {
+                    profile_dir: profile.dir().to_path_buf(),
+                    home: format!("{}/", site.page),
+                    open: AsyncMutex::default(),
+                };
+                let t = Tracker::with(transport, Arc::default(), None);
+                let open = &t.transport.open;
+                let data = format!("{}/data", site.api);
+                assert_eq!(
+                    t.transport.get(&data, None).await.unwrap().status,
+                    200,
+                    "the first request opens it"
+                );
+                let first = Arc::clone(&open.lock().await.as_ref().unwrap().browser);
+                t.close_if_idle();
+                assert!(open.lock().await.is_some(), "just used");
+                open.lock().await.as_mut().unwrap().used -= IDLE * 2;
+                t.close_if_idle();
+                assert!(open.lock().await.is_some(), "a request is still holding it");
+                drop(first);
+                t.close_if_idle();
+                assert!(open.lock().await.is_none(), "idle and unused");
+                assert_eq!(
+                    t.transport.get(&data, None).await.unwrap().status,
+                    200,
+                    "the next request opens a new one"
+                );
+                assert!(open.lock().await.is_some());
+            });
+        }
+
+        #[test]
+        fn the_match_trim_keeps_players_teams_and_parties() {
+            block_on_browser(async {
+                let site = Site::start().await.unwrap();
+                let profile = Profile::try_new("trim-test").unwrap();
+                let b = Browser::start(
+                    profile.dir(),
+                    &format!("{}/", site.page),
+                    Duration::from_secs(20),
+                )
                 .unwrap();
-            assert!(
-                !r.body.contains("agentName") && !r.body.contains("round-summary"),
-                "{}",
-                r.body
-            );
-            let v: Value = serde_json::from_str(&r.body).unwrap();
-            assert_eq!(
-                parse::parse_match_parties(&v),
-                [vec!["a#1".to_string(), "b#2".to_string()]]
-            );
-            let empty = b
-                .get_trimmed(&format!("{}/empty", site.api), trim)
-                .await
-                .unwrap();
-            let v: Value = serde_json::from_str(&empty.body).unwrap();
-            assert!(
-                parse::parse_match_parties(&v).is_empty(),
-                "an unexpected shape reads as no parties: {}",
-                empty.body
-            );
-        });
+                let trim = Some(MATCH_PLAYERS);
+                let r = b
+                    .get_trimmed(&format!("{}/match", site.api), trim)
+                    .await
+                    .unwrap();
+                assert!(
+                    !r.body.contains("agentName") && !r.body.contains("round-summary"),
+                    "{}",
+                    r.body
+                );
+                let v: Value = serde_json::from_str(&r.body).unwrap();
+                assert_eq!(
+                    parse::parse_match_parties(&v),
+                    [vec!["a#1".to_string(), "b#2".to_string()]]
+                );
+                let empty = b
+                    .get_trimmed(&format!("{}/empty", site.api), trim)
+                    .await
+                    .unwrap();
+                let v: Value = serde_json::from_str(&empty.body).unwrap();
+                assert!(
+                    parse::parse_match_parties(&v).is_empty(),
+                    "an unexpected shape reads as no parties: {}",
+                    empty.body
+                );
+            });
+        }
     }
 }

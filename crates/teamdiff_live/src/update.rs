@@ -22,8 +22,6 @@ use teamdiff_core::shared::{self, Shared};
 use tokio::time;
 
 const LATEST_RELEASE: &str = "https://api.github.com/repos/265866/teamdiff/releases/latest";
-/// Every release, newest first, with what each changed.
-pub const RELEASES: &str = "https://github.com/265866/teamdiff/releases";
 /// Where GitHub serves a release's files, by tag and file name.
 const DOWNLOADS: &str = "https://github.com/265866/teamdiff/releases/download";
 /// The release workflow attaches it to every release.
