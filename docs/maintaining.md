@@ -29,6 +29,7 @@ Commit the generated project on a branch named `main` (`git init --initial-branc
    It allows squash merging only, with the pull request's title and description as the commit, so
    the title becomes the commit on `main`. It creates the `release` label that release-plz puts on
    its pull request.
+
    It adds the Actions policy that allows `pull_request_target` for `rule-changes.yml`; without
    it, a public repository doesn't run the rule-change check, and no pull request gets the "Rule
    changes stand alone" status. It turns on private vulnerability reporting, which
@@ -38,17 +39,16 @@ Commit the generated project on a branch named `main` (`git init --initial-branc
    a pull request, and three required checks from GitHub Actions: `PR title`, `CI passed` and the
    "Rule changes stand alone" status. A ruleset can require checks that haven't run yet, so `main`
    is protected from the first push. `CI passed` passes only when every other CI job passes, so
-   the required checks stay the same when CI gains or loses a job.
-   The `Release build` checks come from another workflow and run only when a pull request changes
-   what goes into a release, so they aren't required.
+   the required checks stay the same when CI gains or loses a job. The `Release build` checks
+   come from another workflow and run only when a pull request changes what goes into a release,
+   so they aren't required.
 
    Running it again sets the same values and creates nothing twice. `just setup-github --dry-run`
    prints each `gh` call instead of running it.
 
 3. Install the [Renovate app](https://github.com/apps/renovate) on the repository. Each week it
    opens one pull request with the crate updates other than major ones, and one for each major
-   update. The toolchain, tool, action
-   and image pins arrive with trellis updates.
+   update. The toolchain, tool, action and image pins arrive with trellis updates.
 
 4. Create a [fine-grained token](https://github.com/settings/personal-access-tokens/new) for
    this repository only, with read and write access to contents and to pull requests. A pull
@@ -71,8 +71,7 @@ Commit the generated project on a branch named `main` (`git init --initial-branc
 5. Check the settings. `just check-github` reports each one as ok or wrong, and fails if any is
    wrong. It checks that the `RELEASE_PLZ_TOKEN` secret exists, but GitHub never shows it a
    secret's value, so the token's access is left to the check in step 4. A missing `main` ruleset,
-   one that isn't active and one that anything may bypass
-   are each wrong.
+   one that isn't active and one that anything may bypass are each wrong.
    On Windows, run it in Git Bash too:
 
    ```sh
@@ -98,23 +97,26 @@ the minor version and a `fix` the patch version. To ship:
    root `Cargo.toml`, in `Cargo.lock` and in the `CHANGELOG.md` heading.
    At the first release, release-plz leaves out each commit that changed only a crate that
    `changelog_include` in `release-plz.toml` lists: it adds those crates' commits only after a
-   release tag. On the release pull request's branch, add to the new section of `CHANGELOG.md` an
-   entry for each commit that this prints and the section lacks; it also prints commits that
+   release tag. It leaves out each commit that changed only a deploy kit in the root `deploy/` at
+   every release. On the release pull request's branch, add to the new section of `CHANGELOG.md`
+   an entry for each commit that this prints and the section lacks; it also prints commits that
    changed the main crate too, which the section has:
-   `git log --format=%s -- crates ':!crates/teamdiff'`. Every type is left out, not only
-   `feat` and `fix`. Put each under `### Added` for a `feat`, `### Fixed` for a `fix`, and
+   `git log --format=%s -- crates deploy ':!crates/teamdiff'`. Every type is left out, not
+   only `feat` and `fix`. Put each under `### Added` for a `feat`, `### Fixed` for a `fix`, and
    `### Other` for any other type, such as a `test` or a `refactor`, and write it as release-plz
-   writes the others: `feat(core): parse dates (#12)` becomes `- *(core)* parse dates (#12)`.
-   Later releases list those commits without the edit.
-   The first release after you add a crate comes out as a patch when only that crate changed, and
-   its notes can repeat older entries; delete those. Renaming the main crate stops the release
-   workflow with an error that says what to do by hand.
+   writes the others: `feat(core): parse dates (#12)` becomes `- *(core)* parse dates (#12)`. Later
+   releases list the crates' commits without the edit, but never the root kit's: add those to the
+   release's section of `CHANGELOG.md` on each release pull request's branch by hand, from
+   `git log --format=%s <previous release tag>..HEAD -- deploy`. The first release after you add a
+   crate comes out as a patch when only that crate changed, and its notes can repeat older entries;
+   delete those. Renaming the main crate stops the release workflow with an error that says what to
+   do by hand.
 2. Under each breaking change, from a commit marked `!` or with a `BREAKING CHANGE:` footer, write
    what users must do before they upgrade. Edit `CHANGELOG.md` on the release pull request's
    branch, as in step 1. [Stability](stability.md) promises users this note.
 3. Merge the release pull request once its checks pass. Merge no other pull request until the
-   release workflow's **Tag** job finishes. A pull
-   request merged before then can get no release pull request until the next push to `main`.
+   release workflow's **Tag** job finishes. A pull request merged before then can get no release
+   pull request until the next push to `main`.
 4. If a later job fails, re-run the failed jobs. They pick up from the same tag.
 
 ### Keep releases verifiable
@@ -146,16 +148,64 @@ Its diff then holds only its own change, at the crate's new path, and its checks
 
 To rename a crate's package, use three pull requests. A rules pull request adds the new name to
 `internal_dependencies` as a key with the old name's list, and beside the old name in each list
-that holds it. It also adds the new name to `changelog_include` in `release-plz.toml`, and to
-`build_script_crates` if the crate has a build script. A code pull request then changes the
+of `internal_dependencies` and `restricted_crates` that holds it. It also adds the new name to
+`changelog_include` in `release-plz.toml`, and to `build_script_crates` if the crate has a build
+script. If the crate is itself a key of `restricted_crates`, the first rules pull request removes
+that key, and the last adds it back under the new name. A code pull request then changes the
 package's `name`, each dependency on it and each path that names it in code. A last rules pull
 request removes the old name's key and the old name from each list. Move the directory and rename
 the package in separate pull requests.
 
 This doesn't cover the package `teamdiff`, which carries the project's name. Rule files
-name it too: the root `Cargo.toml`, `dylint.toml`, the release configuration, the justfile
-and the workflows. So renaming it changes rules and code together. To rename it,
-follow "Name and kind" under [Change an answer](#change-an-answer).
+name it too: the root `Cargo.toml`, `dylint.toml`, the release configuration, the justfile and
+the workflows. So renaming it changes rules and code together. To rename it, follow "Name and
+kind" under [Change an answer](#change-an-answer).
+
+## Keep a package away from some crates
+
+`restricted_crates` in `[workspace.metadata.policy]` of the root `Cargo.toml` maps a package to
+the workspace crates that may depend on it, directly or through any other package. A crate that
+must build without a UI toolkit then can't reach one through a new dependency. `just policy` fails
+every other crate that reaches the package, with the path. It also fails a key that lists crates
+but matches no package, so a misspelled key can't pass while it restricts nothing. An empty list
+lets no crate reach the package, and may name one no crate depends on yet, to keep the first
+dependency out. The setting is a rule, so add or change it in a rules pull request:
+
+```toml
+[workspace.metadata.policy.restricted_crates]
+"git+https://github.com/zed-industries/zed" = ["teamdiff"]
+"gpui" = ["teamdiff"]
+"gpui-*" = ["teamdiff"]
+```
+
+A key takes one of three forms:
+
+- **A package name**, such as `gpui`. It matches in any letter case, as crates.io does, and reads
+  `-` and `_` as one, as Cargo does.
+- **A name prefix** ending in `*`, such as `gpui-*`. It matches the same way, so `gpui-*` also
+  covers `gpui_macros`.
+- **A source**, starting with `git+`, `registry+` or `sparse+`. It matches every package from the
+  same repository however the URL is written. The scheme, a `user@`, a port, a query such as
+  `?branch=main`, a fragment, a trailing `/` or `.git`, a percent-escape of a letter, digit, `-`,
+  `.`, `_` or `~`, and letter case, in the path too, don't matter. The kind does, so a `git+` key
+  never matches a registry's packages. The repository must match whole, so
+  `git+https://github.com/zed-industries/zed` doesn't match `zed-fork` or `zed2`. Cargo writes
+  every crates.io package's source as `registry+https://github.com/rust-lang/crates.io-index`,
+  whichever protocol fetched it.
+
+A crate reaches a package through:
+
+- its own normal, build and dev-dependencies, and the normal and build dependencies of each
+  package they bring, workspace crates included. A dependency's own dev-dependencies don't count,
+  since they aren't built for the crate.
+- every platform's dependencies, such as `[target.'cfg(windows)'.dependencies]`, whichever system
+  runs the check.
+- features as the whole workspace turns them on. `cargo metadata` resolves one graph, with every
+  feature of every workspace crate on and each package's features unified across the workspace.
+  So a crate that uses a package without the feature that brings a restricted one still fails
+  when another crate turns that feature on, and the check errs toward failing. Move the code
+  behind that feature into a crate of its own, so the crate that must stay clear doesn't depend
+  on it.
 
 ## Extend what trellis generates
 
@@ -169,12 +219,12 @@ An update leaves them alone.
   `.github/setup-build.sh` in CI's build jobs and the release's, on every runner before the
   build, with the runner's system in `RUNNER_OS` and the target in `TARGET`. In CI it runs right
   after the checkout, before the cache is restored, so it can free the disk space the cache and
-  the build need. trellis writes a
-  starter that installs nothing, and an update never overwrites your version. It can install
-  packages with `sudo apt-get`, free disk space, or download a toolchain component such as
-  Xcode's Metal compiler; a step that fails fails the build, with its output. It is a rule, like
-  the workflows, and `just actionlint` shellchecks it. `timeout` raises those jobs' limit from 60
-  minutes. Set the answer and fill in the script in one rules pull request:
+  the build need, and before `just` and the pinned toolchains are installed, so it can't use
+  either. trellis writes a starter that installs nothing, and an update never overwrites your
+  version. It can install packages with `sudo apt-get`, free disk space, or download a toolchain
+  component such as Xcode's Metal compiler; a step that fails fails the build, with its output. It
+  is a rule, like the workflows, and `just actionlint` shellchecks it. `timeout` raises those
+  jobs' limit from 60 minutes. Set the answer and fill in the script in one rules pull request:
 
   ```sh
   uvx copier update --defaults --vcs-ref=:current: --data 'build={libc: gnu, setup: true, timeout: 90}'
@@ -187,12 +237,13 @@ An update leaves them alone.
   release build replaces trellis's archive with them, and the release attests and publishes them
   with the rest. [Install](install.md), [Verify a release](verifying-releases.md) and
   [Stability](stability.md) then list those names, so changing one breaks your users as
-  "Keep releases verifiable" says. `checksums` names the checksums file, `name` starts the
-  release's title, and `env` sets environment variables, each a quoted string that may hold a
-  `${{ }}` expression, for the release's `cargo build` only, such as
-  `APP_RELEASE: "${{ inputs.ref && '1' || '' }}"`, which is set only when the release workflow,
-  not a pull request, runs the build. The script runs with bash from the repository's root on
-  each target's runner, Git Bash on Windows, after the build, with these variables:
+  "Keep releases verifiable" says. `checksums` names the checksums file, `name` starts the release's
+  title, and `env` sets environment variables for the release's `cargo build` only. Each value is a
+  string, quoted if YAML would read it as a number, a boolean, a date or null, such as `"1"`, and
+  may hold a `${{ }}` expression, such as `APP_RELEASE: "${{ inputs.ref && '1' || '' }}"`, which is
+  set only when the release workflow, not a pull request, runs the build. The script runs with bash,
+  Git Bash on Windows, from the repository's root on each target's runner, after the build, with
+  these variables:
 
   | Variable | Holds |
   | --- | --- |
@@ -208,11 +259,15 @@ An update leaves them alone.
   release publishes whole. For the build to read the notices, give it their absolute path, such as
   `APP_LICENSES: "${{ github.workspace }}/target/THIRD-PARTY-LICENSES.html"`; a
   build script reads a relative path from its crate's directory.
+
   Git Bash turns an argument that starts with `/` into a path, so call a Windows program such as
   Inno Setup's `iscc`, which the windows-2025 runners have, with `MSYS_NO_PATHCONV=1`, and give it
   paths through `cygpath -w`.
+
   The script is a rule, like the workflows, and `just actionlint` shellchecks it. Write it, then
-  set the answer in the same rules pull request, with files for each of the project's targets:
+  set the answer in the same rules pull request, with files for each of the project's targets.
+  This is a starter, not the project's current answer: it names one archive per target, so put in
+  the names your script writes, and every key of a `release` answer the project already has:
 
   ```sh
   uvx copier update --defaults --vcs-ref=:current: \
@@ -223,9 +278,51 @@ An update leaves them alone.
 
   The answer replaces the whole mapping, so repeat every key you keep.
 
-- **Deploy kit.** Keep the scripts and units that install and run it on a host in `deploy/`.
-  They are code, and `just policy` runs shellcheck on the scripts; "Send a change" in
-  [CONTRIBUTING.md](../CONTRIBUTING.md#send-a-change) says which files there stay rules.
+- **Deploy kit.** Keep the scripts and units that install and run it on a host in
+  `crates/teamdiff/deploy/`. release-plz counts only the commits that change a file in a
+  crate's directory, so a commit that changes only a kit there, such as
+  `fix(deploy): restart the service after an install`, gets a release of its own and a line in
+  its notes. The kit's files are code, and `just policy` runs shellcheck on its scripts; "Send a
+  change" in [CONTRIBUTING.md](../CONTRIBUTING.md#send-a-change) says which files there stay
+  rules. A release archive doesn't hold the kit.
+
+  `just policy` checks a kit in the root `deploy/` the same way, but release-plz ignores it: a
+  commit that changes only that kit releases nothing, and its fix ships with the next release of
+  the crate. Add the fix's line to that release's notes by hand, in `CHANGELOG.md` on the release
+  pull request's branch, as [Each release](#each-release) says. To move the kit into the crate,
+  open one pull request that moves it:
+
+  ```sh
+  git mv deploy crates/teamdiff/deploy
+  ```
+
+  `just rule-changes` leaves out the kit's code, the files that aren't rules by their names, when
+  each keeps its path in the kit, its bytes and its mode. The kit's rule files, such as an
+  `action.yml` or a `*.just` module, count as rules at both paths, as a workflow or justfile
+  outside the kit that names its path does when it changes, such as a workflow's
+  `uses: ./deploy` or a justfile's `import 'deploy/tasks.just'`. Change those paths in the same
+  pull request, in the kit's rule files too, and the pull request is a rules change. A code file
+  added, removed or changed in it makes it no longer a move, so the kit's code counts at both
+  paths and mixes with its rules.
+
+  The kit sits two directories deeper after the move, so a code file that names the old place,
+  such as `deploy/install.sh` in a unit or a README, or that climbs out of the kit with `..`, such
+  as `cd "$(dirname "$0")/.."` or an `EnvironmentFile=` path through `deploy/../.env`, reaches
+  somewhere else with the same bytes. Fix those in a code pull request right after the move. Crate
+  code that reaches into the kit by a relative path, such as
+  `include_str!("../../../deploy/app.service")`, stops building at the move, so drop that path in
+  a code pull request before it. The move doesn't count either when:
+
+  - the root keeps a `deploy` entry, or the kit's code also lands in a second crate;
+  - the root or `crates/` holds an entry that a case-insensitive file system reads as the same
+    name, or the crate's name isn't plain ASCII;
+  - the crate already held a `deploy` entry before the move;
+  - the kit holds a symbolic link, a submodule or a `Cargo.toml`, or a member's `build` key names
+    a file in it;
+  - git checks its code out differently at the new place, or a `.gitattributes` anywhere is
+    spelled in other letters;
+  - in a run on the working tree, either place, or a `.gitattributes` anywhere, has an
+    uncommitted change.
 
 ## Change an answer
 
@@ -240,28 +337,23 @@ or the processors Linux and Windows build for, `x86_64` and `aarch64` (ARM64):
 ```sh
 uvx copier update --defaults --vcs-ref=:current: --data 'architectures=[x86_64]'
 ```
+The change is a rule change, so it can't also change code. Once it merges, run `just check-github`
+on `main`, and `just setup-github` if it reports a wrong setting. Changing the platforms or
+architectures needs nothing on GitHub, since `CI passed` covers whatever platforms CI runs. Some
+answers also change what GitHub needs:
 
-The change is a rule change, so it can't also change code. Once it merges, run
-`just check-github` on `main`, and `just setup-github` if it reports a wrong setting.
-Changing the platforms or architectures needs nothing on GitHub, since `CI passed` covers
-whatever platforms CI runs.
-Some answers also change what GitHub needs:
-
-- **Visibility.** A private repository costs more to run and lacks some of what a public one
-  has. Protecting its `main` needs GitHub Pro or a paid organization plan, and its CI draws on the
-  account's included Actions usage, where
-  macOS and Windows runners cost more than Linux ones; GitHub's
-  [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
-  page has the rates.
-  Its releases aren't attested, because without GitHub Enterprise Cloud, GitHub attests release
-  files only in public repositories.
-  GitHub takes private vulnerability reports only in public repositories, so a private
-  repository's `SECURITY.md` sends reports to issues.
+- **Visibility.** A private repository costs more to run and lacks some of what a public one has.
+  Protecting its `main` needs GitHub Pro or a paid organization plan, and its CI draws on the
+  account's included Actions usage, where macOS and Windows runners cost more than Linux ones.
+  [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions) has
+  GitHub's rates. Its releases aren't attested, because without GitHub Enterprise Cloud, GitHub
+  attests release files only in public repositories. GitHub takes private vulnerability reports only
+  in public repositories, so a private repository's `SECURITY.md` sends reports to issues.
 
   To make the repository private, first merge the change that
-  `uvx copier update --defaults --vcs-ref=:current: --data visibility=private` makes, then make
-  the repository private on GitHub and run `just check-github` on `main`. The Actions policy for
-  the rule-change check then no longer matters.
+  `uvx copier update --defaults --vcs-ref=:current: --data visibility=private` makes, then make the
+  repository private on GitHub and run `just check-github` on `main`. The Actions policy for the
+  rule-change check then no longer matters.
 
 An update writes nothing into `crates/` apart from a published crate's `LICENSE` files, which it
 adds or deletes as publishing or the license changes. So the answers that the crates' own files
@@ -286,7 +378,9 @@ hold need more than the update, and two can't change this way at all:
   it's missing, and don't run a plain `bun install` or `just web-build` on that branch: until
   the update merges, `.gitignore` doesn't ignore the app's `node_modules/` and `dist/`, so
   `just rule-changes` counts what they write. Then run the update with `--data web_ui=true`, and
-  add the app's settings files to its pull request.
+  add the app's settings files to its pull request. When the app trips a check that only a rule
+  can settle, such as a class name `just typos` flags, which only an entry in `_typos.toml` lets
+  through, land that rule in a rules pull request before the app's code pull request.
 
 The other answers change only files the update writes.
 

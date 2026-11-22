@@ -22,6 +22,11 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 | `crates/teamdiff_live` | Everything that talks to the outside: the Riot Client's local API and Riot's game services, valorant-api.com, tracker.gg through `teamdiff_browser`, the controller that keeps the model current, and the self-updater, which reads GitHub releases. |
 | `release/package.sh` | Writes each target's release files, the ones `release` in `.copier-answers.yml` names. [docs/maintaining.md](docs/maintaining.md#extend-what-trellis-generates) says what it gets. It is a rule, like the workflows. |
 
+A build with `#![windows_subsystem = "windows"]`, as a Windows GUI app has, gets no console, so on
+Windows its `--version` prints only into a pipe or a file, such as
+`teamdiff --version > version.txt`. The test of it passes either way, since it reads
+through a pipe.
+
 Add a row for each crate you add, in the same pull request as the rule change that allows it.
 
 Every crate is a workspace member one directory below `crates/`, as `crates/<name>`. That is a
@@ -30,20 +35,24 @@ else, a nested one included, and a package there that isn't a member. It also fa
 directory or `crates` that is a symbolic link, and a crate directory whose name isn't ASCII or
 that Windows reads as another name: one that ends in a dot or a space, or holds a `:` or a `\`.
 It fails a git submodule, or any other git repository, anywhere in the repository, since no check
-sees its files, and two paths anywhere in the repository that macOS or Windows reads as one, such
-as two crate directories whose names differ only in letter case. It fails any path with a part of the
-form of a Windows short name too, such as `cargo~1.tom` or `demo_c~1`: at most eight characters
-that end in `~` and digits, then at most three after a dot. Windows opens `Cargo.toml` under the
-first, so a checkout of both there can hold one file, with the other's contents.
+sees its files, and two paths anywhere in the repository that macOS or Windows reads as one, such as
+two crate directories whose names differ only in letter case. It fails any path with a part of the
+form of a Windows short name too, such as `cargo~1.tom` or `demo_c~1`: at most eight characters that
+end in `~` and digits, then at most three after a dot. Windows opens `Cargo.toml` under the first,
+so a checkout of both there can hold one file, with the other's contents.
 
 ## Set up
 
-Install [rustup](https://rustup.rs/), [cargo-binstall](https://github.com/cargo-bins/cargo-binstall),
-[uv](https://docs.astral.sh/uv/), [Go](https://go.dev/dl/) for actionlint, and
-[shellcheck](https://www.shellcheck.net/) 0.11.0, which actionlint runs on the workflows' scripts
-and `just policy` on a deploy kit's. On
-Windows, also install the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-with the "Desktop development with C++" workload, which Rust's MSVC toolchain links with.
+Install these first:
+
+- [rustup](https://rustup.rs/), [cargo-binstall](https://github.com/cargo-bins/cargo-binstall),
+  [uv](https://docs.astral.sh/uv/), and [Go](https://go.dev/dl/) for actionlint.
+- [shellcheck](https://www.shellcheck.net/) 0.11.0, which actionlint runs on the workflows'
+  scripts and `just policy` on a deploy kit's.
+- On Windows, the
+  [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with
+  the "Desktop development with C++" workload, which Rust's MSVC toolchain links with.
+
 Then install just, and use it to install the tools and toolchains the checks use:
 
 ```sh
@@ -81,7 +90,7 @@ nightly rustfmt, and stable rustfmt ignores them with a warning. For rust-analyz
 | `just test` | The tests through nextest, then the doctests. |
 | `just docs` | The docs, private items included, warnings as errors. |
 | `just build-release` | The release build. |
-| `just notices` | The license notices a release ships, in `target/THIRD-PARTY-LICENSES.html`. It fails on a license `about.toml` doesn't accept. |
+| `just notices` | The license notices `release/package.sh` gets, in `target/THIRD-PARTY-LICENSES.html`. It fails on a license `about.toml` doesn't accept. |
 | `just rule-changes [base]` | Rules and code change in separate pull requests. |
 
 Before you commit, run `just ci` and fix what fails. Never weaken a check to get it passing: no
@@ -171,8 +180,8 @@ The docs keep one shape. Write them to the
   `Install`, `Documentation` and `License`.
 - **Where things go.** Design decisions go in [docs/design.md](docs/design.md), and compatibility
   promises in [docs/stability.md](docs/stability.md). release-plz writes `CHANGELOG.md`; don't edit
-  it by hand except as the release steps in
-  [docs/maintaining.md](docs/maintaining.md#each-release) say.
+  it by hand except as the release steps in [docs/maintaining.md](docs/maintaining.md#each-release)
+  say.
 
 ## Product boundaries
 
@@ -221,23 +230,29 @@ and anything else is a rule. Every `build.rs` is a rule too, except one below a 
 letter case, before or after the change. The file a crate's `build` key names is a rule as well, as
 is every `.gitignore`, `.ignore`, `bunfig.toml`, `.npmrc`, TypeScript settings file (a `.json` file
 whose name starts with `tsconfig`) and git submodule, wherever it sits, and every path Windows reads
-as another path: one with a part that ends in a dot or a space, that holds a `:` or a `\`, or
-that has the form of a short name.
-`just policy` fails a TypeScript settings file whose `extends` or `references` names anything but
-another one in the repository, by a path that starts with `./` or `../`, so every file a
-`tsconfig.json` reaches is a rule. It also fails one that TypeScript could read another way than
-`just policy` does, such as one with a lone carriage return. The root `.gitattributes` may set
-only `text`, `-text`, `text=auto` and `eol=lf`, with no attribute macro, so a checkout holds the
-bytes the diff showed, apart from line endings; `just policy` fails any other attribute, such as
-`working-tree-encoding`, `ident`, `filter` or `binary`. A crate whose directory moves whole,
-renamed with no file in it changed, is neither rule nor code, so a crate's directory can move in one
-pull request beside the `path` of each dependency on it. A file in the crate that reads its own
-location, such as a build script that reads `CARGO_MANIFEST_DIR`, can then do something else, as a
-code change can change what a listed build script emits.
-So an untracked file that fits none of these, such as an `.envrc`, counts as a rule in
-`just rule-changes`: commit it in a rules pull request, or list it in `.git/info/exclude`. When a
-new rule would flag existing code, either fix the code in one pull request and add the rule in the
-next, or add the rule together with an `expect` and a real reason at each place it flags. A
+as another path: one with a part that ends in a dot or a space, that holds a `:` or a `\`, or that
+has the form of a short name. `just policy` fails a TypeScript settings file whose `extends` or
+`references` names anything but another one in the repository, by a path that starts with `./` or
+`../`, so every file a `tsconfig.json` reaches is a rule. It also fails one that TypeScript could
+read another way than `just policy` does, such as one with a lone carriage return. The root
+`.gitattributes` may set only `text`, `-text`, `text=auto` and `eol=lf`, with no attribute macro, so
+a checkout holds the bytes the diff showed, apart from line endings; `just policy` fails any other
+attribute, such as `working-tree-encoding`, `ident`, `filter` or `binary`. A crate whose directory
+moves whole, renamed with no file in it changed, is neither rule nor code, so a crate's directory
+can move in one pull request beside the `path` of each dependency on it. A file in the crate that
+reads its own location, such as a build script that reads `CARGO_MANIFEST_DIR`, can then do
+something else, as a code change can change what a listed build script emits. An untracked file that
+fits none of these, such as an `.envrc`, counts as a rule in `just rule-changes`: commit it in a
+rules pull request, or list it in `.git/info/exclude`.
+
+A root deploy kit that moves into `crates/teamdiff/deploy/` with every code file unchanged
+leaves its code out as a moved crate does, while its files that are rules by their names count at
+both paths, so the move lands in a rules pull request beside the paths that name the kit, as
+[Maintaining](docs/maintaining.md#extend-what-trellis-generates) says. A code file in the kit that
+names `deploy/` or climbs out of it with `..` reaches somewhere else after the move.
+
+When a new rule would flag existing code, either fix the code in one pull request and add the rule
+in the next, or add the rule together with an `expect` and a real reason at each place it flags. A
 proc-macro dependency is code: list the crate in `proc_macro_crates` in one pull request, then add
 the dependency and its first use in the next. Run `just rule-changes` to see how your changes
 sort: it counts the rule and code files, and lists both when a change mixes them.
@@ -251,33 +266,45 @@ with an entry for a crate the dependency graph doesn't hold yet. Then add the de
 pull request. Accepting the license for every crate, in `allow` or `accepted`, lets any later
 dependency use it too, so do that only when the owner decides it.
 
-A deploy kit, the scripts, container files and systemd units in `deploy/` that install and run the
-project on a host, is code too, like `crates/`. A kit change lands with the code change it needs,
-and review reads it as code. `just policy` runs shellcheck on each of its scripts, the files that
-end in `.sh`, `.bash`, `.dash`, `.ksh` or `.bats`, start with a `#!` line that names `sh`,
-`bash`, `dash`, `ksh`, `ash` or `bats`, or set their shell with a `# shellcheck shell=<shell>`
-line, and on the files they source, in a copy of `deploy/` alone, so a file outside the kit counts
-as missing. A library a script sources through a path shellcheck can't follow, with SC1090 or
-SC1091 silenced, is checked only if it is a script by itself, so give it a `.sh` name or a
-`shell=` line, and give every other script a `#!` line. `just policy` reads no `.shellcheckrc`
-and no `SHELLCHECK_OPTS`, and reports no finding in a host file a script sources, such as
-`/etc/os-release`. Silence a finding with `# shellcheck disable=SC<code> # <reason>` as close
-above it as shellcheck takes a directive. shellcheck applies a directive to the whole command
-below it, so `just policy` runs it again with every `disable` taken out and asks shellcheck
-whether a directive closer to each finding a directive hid would silence it alone. If one would,
-such as above a line in the function or block the directive sits over, or in the file a sourced
-line reads, the directive fails, though another directive for the code sits between. Where
-shellcheck takes no closer one, such as after a `|`, `&&` or `||`, inside `[[ ]]`, an array or a
-heredoc, above a `case` pattern or above the `done` that ends a loop, it passes, so a directive
-above a `case` covers its pattern lines, one-line bodies included. A file that sources a kit file
-by its absolute path in the checkout fails, since shellcheck would read the checkout, not the copy. It also fails a directive after
-code on its line or spelled with an unusual space, one that disables anything but codes, such as
-`all` or a range, or a parse check other than SC1090 and SC1091, one without a reason, `shell=` in
-a file with a `#!` line, `source=` or `source-path=` that leaves `deploy/`, any key but
-`disable`, `enable`, `shell`, `source` and `source-path`, and a symbolic link in `deploy/`. A file
-in `deploy/` that is a rule by its name stays a rule: a `justfile` or `*.just` module, an
-`action.yml`, `.gitignore`, `.ignore`, `bunfig.toml`, `.npmrc`, `build.rs`, TypeScript settings
-file, agent instruction file or tool configuration file, and a path Windows reads as another.
+A dependency that brings in a crate `deny.toml` bans, such as `paste`, fails `just deny` however
+deep in the dependency graph the banned crate sits. Letting it in is the owner's decision, and it
+lands in two pull requests too. First, in a rules pull request, add the crate that depends on the
+banned one directly to the ban's `wrappers`, with the reason in a comment, such as
+`wrappers = ["some-crate"]` under `crate = "paste"`. Only that crate may then depend on it, and
+`just deny` passes, with a warning, while the dependency graph doesn't hold the wrapper yet. Then
+add the dependency in a code pull request.
+
+A deploy kit, the scripts, container files and systemd units in `crates/teamdiff/deploy/`
+that install and run the project on a host, is code too, like the rest of `crates/`, and so is a kit
+in the root `deploy/`, though release-plz releases nothing for a change to that one alone, as
+[Maintaining](docs/maintaining.md#extend-what-trellis-generates) says.
+
+A kit change lands with the code change it needs, and review reads it as code. `just policy` runs
+shellcheck on each of its scripts, the files that end in `.sh`, `.bash`, `.dash`, `.ksh` or `.bats`,
+start with a `#!` line that names `sh`, `bash`, `dash`, `ksh`, `ash` or `bats`, or set their shell
+with a `# shellcheck shell=<shell>` line, and on the files they source, in a copy of the kit alone,
+so a file outside the kit counts as missing, the crate's other files and the other kit's included. A
+library a script sources through a path shellcheck can't follow, with SC1090 or SC1091 silenced, is
+checked only if it is a script by itself, so give it a `.sh` name or a `shell=` line, and give every
+other script a `#!` line. `just policy` reads no `.shellcheckrc` and no `SHELLCHECK_OPTS`, and
+reports no finding in a host file a script sources, such as `/etc/os-release`. Silence a finding
+with `# shellcheck disable=SC<code> # <reason>` as close above it as shellcheck takes a directive.
+shellcheck applies a directive to the whole command below it, so `just policy` runs it again with
+every `disable` taken out and asks shellcheck whether a directive closer to each finding a directive
+hid would silence it alone. If one would, such as above a line in the function or block the
+directive sits over, or in the file a sourced line reads, the directive fails, though another
+directive for the code sits between. Where shellcheck takes no closer one, such as after a `|`, `&&`
+or `||`, inside `[[ ]]`, an array or a heredoc, above a `case` pattern or above the `done` that ends
+a loop, it passes, so a directive above a `case` covers its pattern lines, one-line bodies included.
+A file that sources a kit file by its absolute path in the checkout fails, since shellcheck would
+read the checkout, not the copy. It also fails a directive after code on its line or spelled with an
+unusual space, one that disables anything but codes, such as `all` or a range, or a parse check
+other than SC1090 and SC1091, one without a reason, `shell=` in a file with a `#!` line, `source=`
+or `source-path=` that leaves the kit, any key but `disable`, `enable`, `shell`, `source` and
+`source-path`, and a symbolic link in the kit. A file in the kit that is a rule by its name stays a
+rule: a `justfile` or `*.just` module, an `action.yml`, `.gitignore`, `.ignore`, `bunfig.toml`,
+`.npmrc`, `build.rs`, TypeScript settings file, agent instruction file or tool configuration file,
+and a path Windows reads as another.
 
 ## License
 

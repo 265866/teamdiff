@@ -10,12 +10,12 @@ each platform:
 
 ## Install a release
 
-1. Download the files for your platform and `SHA256SUMS.txt` from the release.
+1. Download the file you want for your platform, and `SHA256SUMS.txt`, from the release.
 2. Check the download as [Verify a release](verifying-releases.md) shows.
-3. Install them: run an installer, or unpack an archive or take the program as it is and put it
-   where you keep programs, such as a directory on your `PATH`.
+3. Install it. Run an installer as it is. Unpack an archive, then keep the program where you keep
+   programs, such as a directory on your `PATH` for a command-line one.
 
-To update, install the new release the same way.
+To update, install the new release.
 
 ## Build from source
 
