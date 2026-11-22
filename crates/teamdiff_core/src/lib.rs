@@ -3,6 +3,7 @@
 
 mod cast;
 pub mod content;
+pub mod demo;
 pub mod goldstars;
 pub mod local_files;
 pub mod model;
