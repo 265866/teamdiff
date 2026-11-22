@@ -16,6 +16,7 @@ path = "src/main.rs"
 teamdiff_core = { path = "../teamdiff_core" }
 
 [build-dependencies]
+anyhow = "1.0.104"
 teamdiff_core = { path = "../teamdiff_core" }
 
 [lints]
