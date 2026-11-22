@@ -111,6 +111,7 @@ jobs:
     name: Attest and publish
     needs: [release, build]
     runs-on: ubuntu-24.04
+    # The attest retries' waits add four minutes to a private repository's 15.
     timeout-minutes: 20
     permissions:
       contents: write
