@@ -71,8 +71,8 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           # The release's own build settings, from the release answer.
-          TEAMDIFF_RELEASE_BUILD: "${{ inputs.ref && '1' || '' }}"
           TEAMDIFF_LICENSES: "${{ github.workspace }}/target/THIRD-PARTY-LICENSES.html"
+          TEAMDIFF_RELEASE_BUILD: "${{ inputs.ref && '1' || '' }}"
         run: cargo build --locked --release --package teamdiff --target "$TARGET"
 
       - name: Check the exe runs without the Visual C++ runtime
