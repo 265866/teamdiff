@@ -13,7 +13,11 @@ name = "teamdiff"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.104"
 teamdiff_core = { path = "../teamdiff_core" }
+teamdiff_live = { path = "../teamdiff_live" }
+teamdiff_ui = { path = "../teamdiff_ui" }
+tokio = { version = "1.53.3", features = ["rt-multi-thread"] }
 
 [build-dependencies]
 anyhow = "1.0.104"

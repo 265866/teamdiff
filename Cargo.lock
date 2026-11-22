@@ -2786,6 +2786,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "teamdiff_core",
+ "teamdiff_live",
+ "teamdiff_ui",
+ "tokio",
 ]
 
 [[package]]
