@@ -12,6 +12,7 @@ publish.workspace = true
 anyhow = "1.0.104"
 base64 = "0.23.1"
 jiff = { version = "1.0.2", default-features = false, features = ["std"] }
+semver = "1.0.28"
 serde_json = "1.0.154"
 
 [lints]
