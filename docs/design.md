@@ -15,7 +15,7 @@ in the game.
 
 | Crate | Owns |
 | --- | --- |
-| `teamdiff_core` | The model of a lobby and its players, and every parser: Riot's and tracker.gg's JSON, valorant-api.com's names, the lockfile and the game log, the command line, the demo data, and the license notices. It does no I/O beyond reading paths it's given. |
+| `teamdiff_core` | The model of a lobby and its players, and every parser: Riot's and tracker.gg's JSON, valorant-api.com's names, the lockfile and the game log, the command line, the demo data, and the license notices. It does no I/O: it parses text the other crates read, and only builds the `%LocalAppData%` paths. |
 | `teamdiff_browser` | A hidden WebView2 window on a thread of its own that keeps a tracker.gg page loaded and makes the site's API requests from it. The only crate with unsafe code. |
 | `teamdiff_live` | The Riot clients (the local API and the game servers), the tracker.gg client over `teamdiff_browser`, the controller that follows the game's phases and fills the model, and the self-updater. |
 | `teamdiff_ui` | Drawing each screen with ratatui, the accolade icons, and the terminal loop with its keys. |
@@ -42,8 +42,10 @@ selection.
   what users and scripts know, so trellis's `release` answer and `release/package.sh` produce them.
 - **The license notices are embedded in the exe.** `teamdiff --licenses` prints them as plain text,
   as it always has; `build.rs` converts the HTML notices trellis writes.
-- **jiff, not chrono.** cargo-deny rejects chrono as unmaintained (RUSTSEC-2026-0543), and jiff is
-  the advisory's recommended alternative. Both read valorant-api's timestamps identically.
+- **jiff, not chrono.** cargo-deny rejects chrono as unmaintained (RUSTSEC-2026-0543), which
+  recommends jiff or time. jiff parses RFC 3339 and formats with `strftime` patterns as chrono did,
+  so the act times and the demo's dates came over with the same formats. Both read valorant-api's
+  timestamps identically.
 - **Malformed counts wrap.** The release build checks integer overflow and aborts on a panic, where
   teamdiff 0.2.1's wrapped. Sums of counts from a response use wrapping arithmetic, so a malformed
   value shows a wrong number, as it did, rather than closing the app.

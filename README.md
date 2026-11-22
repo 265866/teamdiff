@@ -5,15 +5,11 @@
 
 A terminal companion for VALORANT on Windows: your lobby's ranks, records and recent form, and the post-game results.
 
-- **Agent select:** your teammates as they hover and lock agents, with rank, peak rank, win rate this
-  act (or last act's, until they play), win rate on the current map, and K/D and headshot % over
-  their last 5 matches.
-- **In game:** both teams, the live score, and parties. Riot shares party details only for you and
-  your friends, so other parties are worked out from tracker.gg: players who partied in either one's
-  last match, which needs only one of them to have a public profile, or who were teammates in at
-  least 2 of their last 20 matches. Incognito players are never tied to a party, and a party whose
-  other members are private goes unmarked until the post-game screen, which takes parties from
-  Riot's match details.
+- **Agent select:** your teammates as they hover and lock agents, with rank, peak rank, win rate
+  this act (or last act's, until they play), win rate on the current map, and K/D and headshot %
+  over their last 5 matches.
+- **In game:** both teams, the live score, and parties, including the ones [worked out from
+  tracker.gg](docs/usage.md#run-it).
 - **Post-game:** a victory or defeat banner, your RR change, and every player's Performance Score,
   ACS, K/D/A, ADR, HS%, first bloods, MVP, and the accolades Riot awarded them.
 - **Player details:** press Enter on a player for their act history, maps this act, and recent
@@ -51,11 +47,11 @@ hand, as [Use teamdiff](docs/usage.md#updates) explains.
 ## License
 
 Released under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at
-your option. `teamdiff --licenses` prints the licenses of the open-source crates it is built with.
+your option. `teamdiff --licenses` prints the licenses of the open-source code it is built with.
 
 teamdiff isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
 anyone officially involved in producing or managing Riot Games properties. Riot Games, and all
 associated properties are trademarks or registered trademarks of Riot Games, Inc.
 
-teamdiff was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games.
-Riot Games does not endorse or sponsor this project.
+teamdiff was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot
+Games. Riot Games does not endorse or sponsor this project.
