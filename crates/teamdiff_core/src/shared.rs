@@ -9,8 +9,8 @@ use crate::model::Model;
     dylint_lib = "trellis_lints",
     expect(
         shared_ownership,
-        reason = "teamdiff_live's controller task and teamdiff_ui's terminal loop each hold the \
-                  model for as long as teamdiff runs, and neither outlives the other"
+        reason = "teamdiff_live's controller runs in a spawned tokio task, which must own what it \
+                  uses, while teamdiff_ui's terminal loop on the main thread reads the same model"
     )
 )]
 pub type Shared = Arc<Mutex<Model>>;

@@ -4,7 +4,8 @@
 #[expect(
     clippy::cast_possible_truncation,
     reason = "row counts, text widths and offsets on a screen stay far below 65 536, and a \
-              terminal's own size is a u16, so nothing larger could be drawn anyway"
+              terminal's own size is a u16; a larger one keeps its low bits as in every earlier \
+              release, and the sums it goes into wrap as they did rather than abort"
 )]
 pub(crate) const fn low_u16(n: usize) -> u16 {
     n as u16

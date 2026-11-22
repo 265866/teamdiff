@@ -20,8 +20,8 @@ use crate::icons::Icons;
 /// player's details, `?` shows or hides the accolade legend, and Esc closes the legend, else the
 /// details. With `demo_screen`, the index of a screen in [`demo::SCREENS`], Tab replaces the model
 /// with the next demo screen's. A change of phase closes the details and moves the cursor back to
-/// the top. The screen redraws every 50 ms while it animates, and every 250 ms or on a key
-/// otherwise.
+/// the top. The screen redraws every 50 ms while it animates, and otherwise every 250 ms or on any
+/// terminal event, such as a key or a resize.
 ///
 /// # Errors
 ///
