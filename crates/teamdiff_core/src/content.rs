@@ -1,0 +1,260 @@
+//! Static game content (agent, map, rank and act names) from valorant-api.com.
+
+use std::collections::HashMap;
+
+use jiff::Timestamp;
+use serde_json::Value;
+
+use crate::cast;
+
+/// One competitive act.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Act {
+    /// The act's id, in lowercase.
+    pub id: String,
+    /// Short label such as "V26 A6" or "E9 A3".
+    pub label: String,
+    /// When the act starts.
+    pub start: Timestamp,
+    /// When the act ends, and the next one starts.
+    pub end: Timestamp,
+}
+
+/// The names of agents, maps and ranks, and the competitive acts.
+#[derive(Debug, Clone, Default)]
+pub struct Content {
+    agents: HashMap<String, String>,
+    /// Keyed by lowercase map UUID and by map URL (`/Game/Maps/...`).
+    maps: HashMap<String, String>,
+    tiers: HashMap<u32, String>,
+    /// Competitive acts, oldest first.
+    pub acts: Vec<Act>,
+}
+
+impl Content {
+    /// Reads valorant-api.com's `agents`, `maps`, `competitivetiers` and `seasons` responses.
+    /// Entries without the fields a name needs are skipped, and the rank names come from the
+    /// latest tier table.
+    #[must_use]
+    pub fn from_responses(agents: &Value, maps: &Value, tiers: &Value, seasons: &Value) -> Self {
+        let data = |v: &Value| {
+            v.get("data")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let mut c = Content::default();
+        for a in data(agents) {
+            if let (Some(id), Some(name)) = (a["uuid"].as_str(), a["displayName"].as_str()) {
+                c.agents.insert(id.to_lowercase(), name.to_string());
+            }
+        }
+        for m in data(maps) {
+            if let Some(name) = m["displayName"].as_str() {
+                if let Some(id) = m["uuid"].as_str() {
+                    c.maps.insert(id.to_lowercase(), name.to_string());
+                }
+                if let Some(url) = m["mapUrl"].as_str() {
+                    c.maps.insert(url.to_string(), name.to_string());
+                }
+            }
+        }
+        if let Some(latest) = data(tiers).last() {
+            for t in latest["tiers"].as_array().into_iter().flatten() {
+                if let (Some(n), Some(name)) = (t["tier"].as_u64(), t["tierName"].as_str()) {
+                    c.tiers.insert(cast::low_u32(n), title_case(name));
+                }
+            }
+        }
+        let mut acts: Vec<Act> = data(seasons)
+            .iter()
+            .filter(|s| s["type"].as_str() == Some("EAresSeasonType::Act"))
+            .filter_map(|s| {
+                Some(Act {
+                    id: s["uuid"].as_str()?.to_lowercase(),
+                    label: act_label(s["title"].as_str().or(s["displayName"].as_str())?),
+                    start: s["startTime"].as_str()?.parse().ok()?,
+                    end: s["endTime"].as_str()?.parse().ok()?,
+                })
+            })
+            .collect();
+        acts.sort_by_key(|a| a.start);
+        c.acts = acts;
+        c
+    }
+
+    /// The agent's name, or `?` for an id that isn't known. The id's case doesn't matter.
+    #[must_use]
+    pub fn agent(&self, id: &str) -> String {
+        self.agents
+            .get(&id.to_lowercase())
+            .cloned()
+            .unwrap_or_else(|| "?".into())
+    }
+
+    /// The map's name, from its UUID in any case or its URL, or the URL's last part for a map
+    /// that isn't known.
+    #[must_use]
+    pub fn map(&self, id_or_url: &str) -> String {
+        self.maps
+            .get(id_or_url)
+            .or_else(|| self.maps.get(&id_or_url.to_lowercase()))
+            .cloned()
+            .unwrap_or_else(|| {
+                id_or_url
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(id_or_url)
+                    .to_string()
+            })
+    }
+
+    /// The rank's name, such as "Ascendant 1": "Unranked" for tier 0 and "Tier N" for a tier
+    /// that isn't known.
+    #[must_use]
+    pub fn tier_name(&self, tier: u32) -> String {
+        self.tiers.get(&tier).cloned().unwrap_or_else(|| {
+            if tier == 0 {
+                "Unranked".into()
+            } else {
+                format!("Tier {tier}")
+            }
+        })
+    }
+
+    /// The act with this id, in any case.
+    #[must_use]
+    pub fn act(&self, id: &str) -> Option<&Act> {
+        let id = id.to_lowercase();
+        self.acts.iter().find(|a| a.id == id)
+    }
+
+    /// The act running at `now`.
+    #[must_use]
+    pub fn current_act(&self, now: Timestamp) -> Option<&Act> {
+        self.acts.iter().find(|a| a.start <= now && now < a.end)
+    }
+
+    /// The act before `id`, by start time.
+    #[must_use]
+    pub fn previous_act(&self, id: &str) -> Option<&Act> {
+        let i = self.acts.iter().position(|a| a.id == id.to_lowercase())?;
+        i.checked_sub(1).map(|j| &self.acts[j])
+    }
+}
+
+fn title_case(s: &str) -> String {
+    s.split_whitespace()
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map_or_default(|f| {
+                f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// "V26 // ACT VI" -> "V26 A6", "EPISODE 9 // ACT III" -> "E9 A3".
+fn act_label(title: &str) -> String {
+    let (ep, act) = title
+        .split_once("//")
+        .map_or(("", title.trim()), |(a, b)| (a.trim(), b.trim()));
+    let ep = ep
+        .strip_prefix("EPISODE ")
+        .map_or_else(|| ep.to_string(), |n| format!("E{n}"));
+    let act = act
+        .strip_prefix("ACT ")
+        .map_or_else(|| act.to_string(), |r| format!("A{}", roman(r)));
+    [ep, act]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a numeral of I, V and X sums to a small non-negative number, and anything else \
+              keeps the low bits of its sum"
+)]
+fn roman(r: &str) -> u32 {
+    let val = |c| match c {
+        'I' => 1,
+        'V' => 5,
+        'X' => 10,
+        _ => 0,
+    };
+    let digits: Vec<u32> = r.chars().map(val).collect();
+    digits
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| {
+            if digits.get(i + 1).is_some_and(|&n| n > d) {
+                -i64::from(d)
+            } else {
+                i64::from(d)
+            }
+        })
+        .sum::<i64>() as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn sample() -> Content {
+        Content::from_responses(
+            &json!({ "data": [{ "uuid": "ADD6443A-41BD-E414-F6AD-E58D267F4E95", "displayName": "Jett" }] }),
+            &json!({ "data": [{ "uuid": "7EAECC1B-4337-BBF6-6AB9-04B8F06B3319", "displayName": "Ascent", "mapUrl": "/Game/Maps/Ascent/Ascent" }] }),
+            &json!({ "data": [
+                { "tiers": [{ "tier": 21, "tierName": "IMMORTAL 1" }] },
+                { "tiers": [{ "tier": 0, "tierName": "UNRANKED" }, { "tier": 14, "tierName": "PLATINUM 2" }, { "tier": 21, "tierName": "ASCENDANT 1" }, { "tier": 24, "tierName": "IMMORTAL 1" }] }
+            ]}),
+            &json!({ "data": [
+                { "uuid": "old", "title": "EPISODE 4 // ACT III", "type": "EAresSeasonType::Act", "startTime": "2022-04-27T00:00:00Z", "endTime": "2022-06-22T00:00:00Z" },
+                { "uuid": "ep", "title": "V26", "type": "EAresSeasonType::Episode", "startTime": "2026-06-24T00:00:00Z", "endTime": "2027-01-06T00:00:00Z" },
+                { "uuid": "a5", "title": "V26 // ACT V", "type": "EAresSeasonType::Act", "startTime": "2026-08-19T00:00:00Z", "endTime": "2026-10-14T00:00:00Z" },
+                { "uuid": "a6", "title": "V26 // ACT VI", "type": "EAresSeasonType::Act", "startTime": "2026-10-14T00:00:00Z", "endTime": "2027-01-06T00:00:00Z" }
+            ]}),
+        )
+    }
+
+    #[test]
+    fn names_resolve_case_insensitively() {
+        let c = sample();
+        assert_eq!(c.agent("add6443a-41bd-e414-f6ad-e58d267f4e95"), "Jett");
+        assert_eq!(c.map("/Game/Maps/Ascent/Ascent"), "Ascent");
+        assert_eq!(c.map("7eaecc1b-4337-bbf6-6ab9-04b8f06b3319"), "Ascent");
+        assert_eq!(c.map("/Game/Maps/Unknown/Mystery"), "Mystery");
+    }
+
+    #[test]
+    fn uses_latest_tier_table() {
+        let c = sample();
+        assert_eq!(c.tier_name(21), "Ascendant 1");
+        assert_eq!(c.tier_name(14), "Platinum 2");
+        assert_eq!(c.tier_name(0), "Unranked");
+    }
+
+    #[test]
+    fn acts_are_labelled_and_ordered() {
+        let c = sample();
+        let labels: Vec<_> = c.acts.iter().map(|a| a.label.as_str()).collect();
+        assert_eq!(labels, ["E4 A3", "V26 A5", "V26 A6"]);
+        let now: Timestamp = "2026-10-17T00:00:00Z".parse().unwrap();
+        assert_eq!(c.current_act(now).unwrap().id, "a6");
+        assert_eq!(c.previous_act("a6").unwrap().id, "a5");
+        assert!(c.previous_act("old").is_none());
+    }
+
+    #[test]
+    fn roman_numerals() {
+        assert_eq!(roman("IV"), 4);
+        assert_eq!(roman("VI"), 6);
+        assert_eq!(roman("IX"), 9);
+    }
+}
