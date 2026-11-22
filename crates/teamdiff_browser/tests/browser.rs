@@ -8,12 +8,10 @@ use teamdiff_browser::{Browser, Response};
 use tokio::runtime::Builder;
 use tokio::time;
 
-/// How long each request may take, page load included.
+/// How long each request may take, page load included. A refused page answers only once a request
+/// times out after its load finished, and `WebView2`'s first start on a fresh CI runner can take
+/// most of this, so the refused-page test needs the full time too.
 const TIMEOUT: Duration = Duration::from_secs(20);
-
-/// How long the refused-page test's request may take. A refused page answers only once the
-/// request times out, so this test waits it out in full; the local page loads well within it.
-const REFUSED_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Runs `test` on a multi-threaded runtime, as the app runs the browser's callers.
 fn block_on<F: Future>(test: F) -> F::Output {
@@ -134,12 +132,7 @@ fn a_refused_page_answers_as_a_refusal() {
     block_on(async {
         let site = Site::start().await.unwrap();
         let profile = Profile::try_new("refused-test").unwrap();
-        let b = Browser::start(
-            profile.dir(),
-            &format!("{}/blocked", site.page),
-            REFUSED_TIMEOUT,
-        )
-        .unwrap();
+        let b = Browser::start(profile.dir(), &format!("{}/blocked", site.page), TIMEOUT).unwrap();
         let r = get(&b, &format!("{}/data", site.api)).await;
         assert_eq!(r.status, 0, "a refused page answers with no status: {r:?}");
         assert!(r.body.contains("HTTP 403"), "{r:?}");
