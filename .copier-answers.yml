@@ -3,7 +3,7 @@ _commit: v0.16.1
 _src_path: https://github.com/265866/trellis.git
 architectures:
 - x86_64
-author: Colton
+author: '265866'
 build: {}
 description: 'A terminal companion for VALORANT on Windows: your lobby''s ranks, records
     and recent form, and the post-game results.'
