@@ -20,7 +20,7 @@ impl Record {
     /// Wins and losses together.
     #[must_use]
     pub fn games(self) -> u32 {
-        self.wins + self.losses
+        self.wins.wrapping_add(self.losses)
     }
 
     /// The win percentage, rounded, or `None` without games.
@@ -99,7 +99,7 @@ pub struct PlayerMatch {
     pub team: String,
     /// The agent's id.
     pub agent_id: String,
-    /// The player's party; party ids are unique only within a team.
+    /// The player's party.
     pub party_id: String,
     /// Kills.
     pub kills: u32,
@@ -148,7 +148,9 @@ impl PlayerMatch {
 
     /// Every hit.
     fn shots(&self) -> u32 {
-        self.headshots + self.bodyshots + self.legshots
+        self.headshots
+            .wrapping_add(self.bodyshots)
+            .wrapping_add(self.legshots)
     }
 
     /// The share of hits on the head, as a rounded percentage, or `None` without hits.
@@ -212,7 +214,7 @@ impl MatchSummary {
         self.players.iter().find(|p| p.puuid == puuid)
     }
 
-    /// Puuid -> party id for every player who queued with someone else in this match.
+    /// PUUID -> party id for every player who queued with someone else in this match.
     #[must_use]
     pub fn parties(&self) -> HashMap<String, String> {
         let mut count: HashMap<&str, usize> = HashMap::new();
@@ -372,10 +374,18 @@ fn add_round(round: &Value, by_id: &mut HashMap<String, PlayerMatch>) {
         };
         for d in ps["damage"].as_array().into_iter().flatten() {
             if let Some(pm) = by_id.get_mut(id) {
-                pm.damage += cast::low_u32(d["damage"].as_u64().unwrap_or(0));
-                pm.headshots += cast::low_u32(d["headshots"].as_u64().unwrap_or(0));
-                pm.bodyshots += cast::low_u32(d["bodyshots"].as_u64().unwrap_or(0));
-                pm.legshots += cast::low_u32(d["legshots"].as_u64().unwrap_or(0));
+                pm.damage = pm
+                    .damage
+                    .wrapping_add(cast::low_u32(d["damage"].as_u64().unwrap_or(0)));
+                pm.headshots = pm
+                    .headshots
+                    .wrapping_add(cast::low_u32(d["headshots"].as_u64().unwrap_or(0)));
+                pm.bodyshots = pm
+                    .bodyshots
+                    .wrapping_add(cast::low_u32(d["bodyshots"].as_u64().unwrap_or(0)));
+                pm.legshots = pm
+                    .legshots
+                    .wrapping_add(cast::low_u32(d["legshots"].as_u64().unwrap_or(0)));
             }
         }
         for k in ps["kills"].as_array().into_iter().flatten() {
@@ -414,14 +424,15 @@ pub struct PooledStats {
 
 /// K/D and headshot % pooled over a player's matches: total kills over total deaths, and total
 /// headshots over total shots, so bigger games count for more.
+#[must_use]
 pub fn pooled_kd_hs<'a>(matches: impl IntoIterator<Item = &'a PlayerMatch>) -> PooledStats {
     let (mut kills, mut deaths, mut headshots, mut shots, mut games) =
         (0u32, 0u32, 0u32, 0u32, 0u32);
     for p in matches {
-        kills += p.kills;
-        deaths += p.deaths;
-        headshots += p.headshots;
-        shots += p.shots();
+        kills = kills.wrapping_add(p.kills);
+        deaths = deaths.wrapping_add(p.deaths);
+        headshots = headshots.wrapping_add(p.headshots);
+        shots = shots.wrapping_add(p.shots());
         games += 1;
     }
     let kd = (games > 0).then(|| {
@@ -637,5 +648,39 @@ mod tests {
         assert_eq!(hs_pct, Some(20), "10 / 50 shots");
         assert_eq!(pooled_kd_hs(&[]), pooled(None, None));
         assert_eq!(pooled_kd_hs(&[g(7, 0, 0, 0)]), pooled(Some(7.0), None));
+    }
+
+    #[test]
+    fn malformed_counts_wrap_as_every_earlier_release_did() {
+        let mut v = match_json();
+        v["roundResults"][1]["playerStats"][0]["damage"] = json!([
+            { "damage": u64::from(u32::MAX), "headshots": u64::from(u32::MAX), "bodyshots": 0, "legshots": 0 },
+            { "damage": 2, "headshots": 2, "bodyshots": 0, "legshots": 0 }
+        ]);
+        let m = parse_match(&v).unwrap();
+        let a = m.player("a").unwrap();
+        assert_eq!(
+            a.damage, 151,
+            "150 from round 1, then u32::MAX + 2 wraps to 1"
+        );
+        assert_eq!(
+            a.headshots, 2,
+            "1 from round 1, then u32::MAX + 2 wraps to 1"
+        );
+        let pooled = pooled_kd_hs([a, a]);
+        assert_eq!(
+            pooled.hs_pct,
+            a.hs_pct(),
+            "pooling the same match twice keeps its share"
+        );
+        let record = Record {
+            wins: u32::MAX,
+            losses: 2,
+        };
+        assert_eq!(
+            record.games(),
+            1,
+            "a malformed record wraps instead of aborting"
+        );
     }
 }

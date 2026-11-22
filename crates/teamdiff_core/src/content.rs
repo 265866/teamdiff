@@ -177,8 +177,8 @@ fn act_label(title: &str) -> String {
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "a numeral of I, V and X sums to a small positive number, and anything else keeps \
-              the low bits of its sum"
+    reason = "a numeral of I, V and X sums to a small non-negative number, and anything else \
+              keeps the low bits of its sum"
 )]
 fn roman(r: &str) -> u32 {
     let val = |c| match c {

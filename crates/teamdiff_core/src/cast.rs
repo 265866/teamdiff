@@ -3,8 +3,9 @@
 /// `n` as a `u32`, keeping its low 32 bits as an `as` cast does.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "counts from Riot and tracker.gg fit in 32 bits, and one that doesn't comes from a \
-              malformed response, which keeps its low bits rather than failing the whole response"
+    reason = "counts from Riot and tracker.gg fit in 32 bits; one that doesn't comes from a \
+              malformed response and keeps its low bits, as in every earlier release, and the \
+              sums it goes into wrap rather than abort"
 )]
 pub(crate) fn low_u32(n: u64) -> u32 {
     n as u32
@@ -13,8 +14,8 @@ pub(crate) fn low_u32(n: u64) -> u32 {
 /// `n` as an `i32`, keeping its low 32 bits as an `as` cast does.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "RR changes fit in 32 bits, and one that doesn't comes from a malformed response, \
-              which keeps its low bits rather than failing the whole response"
+    reason = "RR changes fit in 32 bits; one that doesn't comes from a malformed response and \
+              keeps its low bits, as in every earlier release"
 )]
 pub(crate) fn low_i32(n: i64) -> i32 {
     n as i32

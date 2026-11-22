@@ -273,8 +273,8 @@ impl PlayerGoldstars {
         const WINDOW_MS: i64 = 10 * 60 * 1000;
         self.matches
             .iter()
-            .filter(|m| (m.start_ms - start_ms).abs() <= WINDOW_MS)
-            .min_by_key(|m| (m.start_ms - start_ms).abs())
+            .filter(|m| m.start_ms.wrapping_sub(start_ms).wrapping_abs() <= WINDOW_MS)
+            .min_by_key(|m| m.start_ms.wrapping_sub(start_ms).wrapping_abs())
     }
 }
 
@@ -375,5 +375,18 @@ mod tests {
         seen.sort_unstable();
         seen.dedup();
         assert_eq!(seen.len(), Accolade::ALL.len());
+    }
+
+    #[test]
+    fn a_far_off_start_time_finds_no_match_instead_of_aborting() {
+        let g = parse_player(&body(), &Definitions::default());
+        assert!(
+            g.match_near(i64::MIN).is_none(),
+            "the difference wraps, as it always did"
+        );
+        assert!(
+            g.match_near(i64::MAX).is_none(),
+            "the difference wraps, as it always did"
+        );
     }
 }
