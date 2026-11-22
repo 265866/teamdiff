@@ -3,7 +3,8 @@
 [![CI](https://github.com/265866/teamdiff/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/265866/teamdiff/actions/workflows/ci.yml?query=branch%3Amain)
 [![Latest release](https://img.shields.io/github/v/release/265866/teamdiff)](https://github.com/265866/teamdiff/releases/latest)
 
-A terminal companion for VALORANT on Windows: your lobby's ranks, records and recent form, and the post-game results.
+A terminal companion for VALORANT on Windows: your lobby's ranks, records and recent form, and the
+post-game results.
 
 - **Agent select:** your teammates as they hover and lock agents, with rank, peak rank, win rate
   this act (or last act's, until they play), win rate on the current map, and K/D and headshot %
@@ -48,6 +49,9 @@ hand, as [Use teamdiff](docs/usage.md#updates) explains.
 
 Released under either the [MIT License](LICENSE-MIT) or the [Apache License 2.0](LICENSE-APACHE), at
 your option. `teamdiff --licenses` prints the licenses of the open-source code it is built with.
+
+For a build from source, `just notices` writes the licenses of the crates it is built with to
+`target/THIRD-PARTY-LICENSES.html`.
 
 teamdiff isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or
 anyone officially involved in producing or managing Riot Games properties. Riot Games, and all

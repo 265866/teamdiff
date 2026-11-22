@@ -12,10 +12,11 @@ each platform:
 
 1. Download the file you want for your platform, and `SHA256SUMS.txt`, from the release.
 2. Check the download as [Verify a release](verifying-releases.md) shows.
-3. Install it. Run an installer as it is. Unpack an archive, then keep the program where you keep
-   programs, such as a directory on your `PATH` for a command-line one.
+3. Install it. Run an installer. Keep a bare program, or the one an archive holds once you unpack
+   it, where you keep programs, such as a directory on your `PATH` for a command-line one. On Linux
+   or macOS, make a bare program executable first, with `chmod +x`.
 
-To update, install the new release.
+To update, install the new release, unless the program updates itself.
 
 ## Build from source
 
