@@ -12,7 +12,11 @@ libraries = [
 [workspace.metadata.policy]
 # Crates allowed a build script. A build script can emit `cargo::rustc-cfg` and hide code from the
 # lint runs, so each one listed here needs a reason.
-build_script_crates = []
+build_script_crates = [
+    # Embeds the third-party license notices `teamdiff --licenses` prints. It emits only
+    # `rerun-if` lines, no `cfg`.
+    "teamdiff",
+]
 # Proc-macro crates that members may depend on directly. A proc macro writes code the custom lints
 # don't check, so each one listed here needs a reason.
 proc_macro_crates = []

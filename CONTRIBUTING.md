@@ -15,7 +15,7 @@ need admin rights on the repository or the release token, so `just ci` leaves th
 
 | Path | Holds |
 | --- | --- |
-| `crates/teamdiff` | The program: `main.rs` starts it and wires the parts together. No logic that a test would want to call. `teamdiff --version` prints the version line and exits 0. `tests/command_line.rs` runs the built binary and checks it. |
+| `crates/teamdiff` | The program: `main.rs` starts it and wires the parts together. No logic that a test would want to call. `teamdiff --version` prints the version line and exits 0. `tests/command_line.rs` runs the built binary and checks it. `build.rs` writes the third-party license notices to `OUT_DIR`, for `teamdiff --licenses` to print: it converts the HTML notices `just notices` writes when `TEAMDIFF_LICENSES` holds their absolute path, and writes a note otherwise. |
 | `crates/teamdiff_core` | The model and the parsing, which every other crate builds on. A crate of its own keeps the binary's, the UI's and the network's dependencies out of it: any crate may depend on it, and it depends on none of them. |
 | `crates/teamdiff_browser` | The hidden WebView2 browser that keeps a tracker.gg page loaded and makes tracker.gg's API requests from it. WebView2 and the Win32 window that hosts it have only unsafe bindings, so this is the one crate `dylint.toml` allows unsafe code, which keeps it out of every other crate. |
 | `crates/teamdiff_ui` | The terminal UI: draws each screen with ratatui, accolade icons included. It reads the model from `teamdiff_core` and makes no requests. |

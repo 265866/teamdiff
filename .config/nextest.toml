@@ -2,6 +2,17 @@
 # A test still running after 30 s is reported as slow, and one stuck for 2 minutes is stopped.
 slow-timeout = { period = "30s", terminate-after = 4 }
 
+# Tests that start WebView2 take turns: two browsers on one machine slow each other down, and a
+# test's 2 minutes would otherwise start while it waits for another's browser to close. nextest
+# starts a test's clock only once its group lets it run. These tests are the browser crate's
+# integration tests and any test in a module named `webview2`, at the crate root or below.
+[test-groups]
+webview2 = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = '(package(teamdiff_browser) & kind(test)) | test(/(^|::)webview2::/)'
+test-group = 'webview2'
+
 # `just test` on CI. Every failure is reported rather than stopping at the first, and the results
 # are written to target/nextest/ci/junit.xml.
 [profile.ci]
