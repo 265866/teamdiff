@@ -415,9 +415,20 @@ pub fn remove_replaced(exe: &Path) {
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use std::time::SystemTime;
 
+    use teamdiff_core::content::Content;
+    use teamdiff_core::model::Model;
+
     use super::*;
+
+    #[test]
+    fn the_updater_can_run_on_a_task_of_its_own() {
+        fn spawnable<F: Future + Send + 'static>(_: &F) {}
+        let shared = Arc::new(Mutex::new(Model::new(Content::default())));
+        spawnable(&run(shared));
+    }
 
     /// The build provenance GitHub CLI 2.102.0's release workflow made for its Windows installer: a real attestation from the
     /// same action and Sigstore instance as teamdiff's.

@@ -880,6 +880,13 @@ mod tests {
     }
 
     #[test]
+    fn the_controller_can_run_on_a_task_of_its_own() {
+        fn spawnable<F: Future + Send + 'static>(_: &F) {}
+        let task = run(new_shared(Model::new(Content::default())), None);
+        spawnable(&task);
+    }
+
+    #[test]
     fn a_rate_limit_isnt_reported_as_an_error() {
         let shared = new_shared(Model::new(Content::default()));
         report(&shared, &anyhow::Error::new(RateLimited).context("/x"));
