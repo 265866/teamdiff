@@ -3,7 +3,8 @@ name: Release
 # On every push to main, release-plz either tags a release (when the push is a merged release PR)
 # or opens and updates the release PR. A tagged release is built from its tag, attested, and only
 # then published on GitHub with its archives, checksums and attestation, so a published release has
-# them. If building or publishing fails, re-running the failed jobs picks up from the same tag.
+# them. Sigstore's transparency log fails at times, so attesting tries three times. If building or
+# publishing fails anyway, re-running the failed jobs picks up from the same tag.
 #
 # A PR that GITHUB_TOKEN opens starts no pull_request_target workflow, so the release PR needs the
 # RELEASE_PLZ_TOKEN secret (see docs/maintaining.md) to get its rule-change status.
@@ -110,7 +111,7 @@ jobs:
     name: Attest and publish
     needs: [release, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: write
       id-token: write
@@ -144,8 +145,33 @@ jobs:
         working-directory: dist
         run: sha256sum -- * > SHA256SUMS.txt
 
+      # Sigstore's transparency log fails at times, so a failed attestation is tried twice more.
       - name: Attest the archives
         id: attest
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
+
+      - name: Wait before attesting the archives again
+        if: steps.attest.outcome == 'failure'
+        run: sleep 60
+
+      - name: Attest the archives again
+        id: attest-again
+        if: steps.attest.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
+
+      - name: Wait before attesting the archives a last time
+        if: steps.attest-again.outcome == 'failure'
+        run: sleep 180
+
+      - name: Attest the archives a last time
+        id: attest-last
+        if: steps.attest-again.outcome == 'failure'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS.txt
@@ -156,7 +182,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
-          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          # A failed attempt still sets bundle-path, to a file it never wrote, so the path comes
+          # from the attempt that succeeded.
+          BUNDLE: ${{ steps.attest.outcome == 'success' && steps.attest.outputs.bundle-path || steps.attest-again.outcome == 'success' && steps.attest-again.outputs.bundle-path || steps.attest-last.outputs.bundle-path }}
         run: |
           cp "$BUNDLE" dist/attestation.json
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
@@ -189,8 +217,8 @@ jobs:
         with:
           tool: just@1.59.0
 
-      # A token without the access release-plz needs fails it with a bare 403, so this names what the
-      # token lacks, and warns in the token's last 14 days.
+      # A token without the access release-plz needs fails it with a bare 403, so this names what
+      # the token lacks, and warns in the token's last 14 days.
       - name: Check the release token
         env:
           RELEASE_PLZ_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

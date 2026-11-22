@@ -4,7 +4,7 @@ name: Advisories
 # through CI, and flags a new one on `main` before a pull request trips over it.
 # It also runs `just stale-licenses`, which flags an entry in about.toml for a crate that has left
 # the graph: `just notices` lets such an entry through, so a license can be accepted before its
-# crate.
+# crate arrives.
 on:
   schedule:
     - cron: "0 6 * * 1"
