@@ -7,6 +7,7 @@ pub mod goldstars;
 pub mod local_files;
 pub mod presence;
 pub mod stats;
+pub mod tracker;
 mod version_line;
 
 pub use version_line::version_line;
