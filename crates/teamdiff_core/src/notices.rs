@@ -20,8 +20,9 @@
 //! <the license text>
 //! ```
 //!
-//! Anything on the page outside that layout is an error rather than text dropped without a word,
-//! so a change to `about.hbs` stops the release build instead of shipping wrong notices.
+//! From its `<h1>` heading to the end, anything on the page outside that layout is an error rather
+//! than text dropped without a word, so a change to `about.hbs` stops the release build instead of
+//! shipping wrong notices. Only the page's `<head>`, which the text doesn't show, goes unread.
 
 use std::str::Split;
 
@@ -48,14 +49,16 @@ pub fn text_from_html(html: &str) -> anyhow::Result<String> {
         number: 0,
     };
     let mut text = format!("{TITLE}\n\n{INTRO}\n\n");
-    lines.skip_to("<ul>")?;
+    lines.skip_to("<h1>Third-party licenses</h1>")?;
+    lines.expect(&format!("<p>{INTRO}</p>"))?;
+    lines.expect("<ul>")?;
     loop {
         let line = lines.next()?;
         if line.text == "</ul>" {
             break;
         }
         let item = enclosed(line.text, "  <li>", "</li>").with_context(|| at(line.number))?;
-        writeln!(text, "  {}", unescape(item))?;
+        writeln!(text, "  {}", unescape(item, line.number)?)?;
     }
     loop {
         let line = lines.next()?;
@@ -63,7 +66,11 @@ pub fn text_from_html(html: &str) -> anyhow::Result<String> {
             break;
         }
         let name = enclosed(line.text, "<h2>", "</h2>").with_context(|| at(line.number))?;
-        write!(text, "\n{RULE}\n{}\n\nUsed by:\n", unescape(name))?;
+        write!(
+            text,
+            "\n{RULE}\n{}\n\nUsed by:\n",
+            unescape(name, line.number)?
+        )?;
         lines.expect("<p>Used by:</p>")?;
         lines.expect("<ul>")?;
         loop {
@@ -76,13 +83,21 @@ pub fn text_from_html(html: &str) -> anyhow::Result<String> {
             let (url, crate_name) = anchor
                 .split_once("\">")
                 .ok_or_else(|| anyhow!("{} holds no link", at(user.number)))?;
-            writeln!(text, "  {} ({})", unescape(crate_name), unescape(url))?;
+            let crate_name = unescape(crate_name, user.number)?;
+            writeln!(text, "  {crate_name} ({})", unescape(url, user.number)?)?;
         }
         let license = lines.pre()?;
-        write!(text, "\n{}\n", unescape(&license))?;
+        write!(text, "\n{}\n", unescape(&license.body, license.start)?)?;
     }
     lines.expect("</html>")?;
+    lines.end()?;
     Ok(text)
+}
+
+/// A license text, with the number of the line it starts on.
+struct Pre {
+    start: usize,
+    body: String,
 }
 
 /// One line of the page, with its number from 1, which errors name.
@@ -119,12 +134,27 @@ impl<'page> Lines<'page> {
     }
 
     fn skip_to(&mut self, wanted: &str) -> anyhow::Result<()> {
-        while self.next()?.text != wanted {}
+        loop {
+            let Some(text) = self.rest.next() else {
+                bail!("the license notices have no line {wanted:?}");
+            };
+            self.number += 1;
+            if text == wanted {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Checks nothing follows: the page ends with the newline after `</html>`.
+    fn end(&mut self) -> anyhow::Result<()> {
+        if self.rest.next() != Some("") || self.rest.next().is_some() {
+            bail!("{} follows </html>", at(self.number + 1));
+        }
         Ok(())
     }
 
     /// The text of a `<pre>` element, which may span lines, starting on the next line.
-    fn pre(&mut self) -> anyhow::Result<String> {
+    fn pre(&mut self) -> anyhow::Result<Pre> {
         let first = self.next()?;
         let mut body = first
             .text
@@ -138,10 +168,20 @@ impl<'page> Lines<'page> {
             .to_owned();
         loop {
             if let Some(done) = body.strip_suffix("</pre>") {
-                return Ok(done.to_owned());
+                return Ok(Pre {
+                    start: first.number,
+                    body: done.to_owned(),
+                });
             }
+            let Some(line) = self.rest.next() else {
+                bail!(
+                    "the license text from {} never closes with </pre>",
+                    at(first.number)
+                );
+            };
+            self.number += 1;
             body.push('\n');
-            body.push_str(self.next()?.text);
+            body.push_str(line);
         }
     }
 }
@@ -158,7 +198,9 @@ fn at(number: usize) -> String {
 }
 
 /// Undoes the escaping Handlebars applies to `{{...}}`: `&`, `<`, `>`, `"`, `'`, `` ` `` and `=`.
-fn unescape(text: &str) -> String {
+/// Handlebars writes no other `&`, so any other one means the page wasn't escaped the way this
+/// reads it, and is an error naming `number`, the line the text starts on.
+fn unescape(text: &str, number: usize) -> anyhow::Result<String> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(amp) = rest.find('&') {
@@ -175,16 +217,14 @@ fn unescape(text: &str) -> String {
         ]
         .into_iter()
         .find(|(name, _)| rest.starts_with(name));
-        if let Some((name, character)) = entity {
-            out.push(character);
-            rest = &rest[name.len()..];
-        } else {
-            out.push('&');
-            rest = &rest[1..];
-        }
+        let Some((name, character)) = entity else {
+            bail!("{} holds an & that Handlebars didn't write", at(number));
+        };
+        out.push(character);
+        rest = &rest[name.len()..];
     }
     out.push_str(rest);
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -285,15 +325,48 @@ Redistribution is allowed.
     fn refuses_a_page_that_ends_early() {
         let page = &PAGE[..PAGE.find(" is allowed.").unwrap()];
         let error = format!("{:#}", text_from_html(page).unwrap_err());
-        assert!(error.contains("end too early"), "{error}");
+        assert!(
+            error.contains("the license text from line 29 of the license notices never closes"),
+            "the error names where the open license text starts: {error}"
+        );
     }
 
     #[test]
-    fn leaves_an_ampersand_that_starts_no_entity() {
+    fn refuses_an_ampersand_handlebars_did_not_write() {
         assert_eq!(
-            unescape("a & b &unknown; &amp;"),
-            "a & b &unknown; &",
-            "only Handlebars' entities change"
+            unescape("&lt;a&gt; &amp;amp;", 3).unwrap(),
+            "<a> &amp;",
+            "each entity decodes once"
+        );
+        let error = format!("{:#}", unescape("a & b", 3).unwrap_err());
+        assert!(
+            error.contains("line 3 of the license notices holds an & that Handlebars didn't write"),
+            "{error}"
+        );
+        let page = PAGE.replace("Redistribution is allowed.", "Rights & duties.");
+        assert!(text_from_html(&page).is_err(), "an unescaped page fails");
+    }
+
+    #[test]
+    fn refuses_a_reworded_intro_and_text_after_the_page() {
+        let reworded = PAGE.replace("Each license text", "Every license text");
+        let error = format!("{:#}", text_from_html(&reworded).unwrap_err());
+        assert!(
+            error.contains("line 9 of the license notices should be"),
+            "{error}"
+        );
+        let trailing = format!("{PAGE}<script></script>\n");
+        let error = format!("{:#}", text_from_html(&trailing).unwrap_err());
+        assert!(error.contains("follows </html>"), "{error}");
+    }
+
+    #[test]
+    fn names_a_missing_heading() {
+        let page = PAGE.replace("<h1>Third-party licenses</h1>", "<h1>Licenses</h1>");
+        let error = format!("{:#}", text_from_html(&page).unwrap_err());
+        assert!(
+            error.contains("have no line \"<h1>Third-party licenses</h1>\""),
+            "{error}"
         );
     }
 }
