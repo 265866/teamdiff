@@ -60,4 +60,3 @@ From then on teamdiff updates itself from this repository again.
 - bring back the guide, the privacy rules and the Riot notice ([#15](https://github.com/265866/teamdiff/pull/15))
 - *(browser)* give the refused-page test the full request timeout ([#16](https://github.com/265866/teamdiff/pull/16))
 - update trellis to v0.16.1 and name 265866 as the copyright holder ([#17](https://github.com/265866/teamdiff/pull/17))
-- generate from trellis
