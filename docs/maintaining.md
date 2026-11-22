@@ -96,6 +96,16 @@ the minor version and a `fix` the patch version. To ship:
    before you merge: the next merge to `main` closes the release pull request and opens a new one
    without the edit. To make a release a minor one, change the version on that branch too: in the
    root `Cargo.toml`, in `Cargo.lock` and in the `CHANGELOG.md` heading.
+   At the first release, release-plz leaves out each commit that changed only a crate that
+   `changelog_include` in `release-plz.toml` lists: it adds those crates' commits only after a
+   release tag. On the release pull request's branch, add to the new section of `CHANGELOG.md` an
+   entry for each commit that this prints and the section lacks; it also prints commits that
+   changed the main crate too, which the section has:
+   `git log --format=%s -- crates ':!crates/teamdiff'`. Every type is left out, not only
+   `feat` and `fix`. Put each under `### Added` for a `feat`, `### Fixed` for a `fix`, and
+   `### Other` for any other type, such as a `test` or a `refactor`, and write it as release-plz
+   writes the others: `feat(core): parse dates (#12)` becomes `- *(core)* parse dates (#12)`.
+   Later releases list those commits without the edit.
    The first release after you add a crate comes out as a patch when only that crate changed, and
    its notes can repeat older entries; delete those. Renaming the main crate stops the release
    workflow with an error that says what to do by hand.
@@ -157,7 +167,9 @@ An update leaves them alone.
   musl, for a program that links system libraries such as GTK, WebKitGTK or Vulkan, which musl
   can't; [Install](install.md) then says which systems the release runs on. `setup: true` runs
   `.github/setup-build.sh` in CI's build jobs and the release's, on every runner before the
-  build, with the runner's system in `RUNNER_OS` and the target in `TARGET`. trellis writes a
+  build, with the runner's system in `RUNNER_OS` and the target in `TARGET`. In CI it runs right
+  after the checkout, before the cache is restored, so it can free the disk space the cache and
+  the build need. trellis writes a
   starter that installs nothing, and an update never overwrites your version. It can install
   packages with `sudo apt-get`, free disk space, or download a toolchain component such as
   Xcode's Metal compiler; a step that fails fails the build, with its output. It is a rule, like
@@ -191,23 +203,29 @@ An update leaves them alone.
   | `DIST` | The empty directory, an absolute path, to write the files to. |
 
   The build fails unless `DIST` then holds exactly the names `files` lists for the target, each a
-  file with contents, and fails for a target `files` doesn't list, so give a new platform's
-  files in the same update that adds it. The script runs with `-e`; it
-  must not write `dist/`, which the release publishes whole. For the build to read the notices,
-  give it their absolute path, such as
+  file with contents, and fails for a target `files` doesn't list, so give a new platform's files
+  in the same update that adds it. The script runs with `-e`; it must not write `dist/`, which the
+  release publishes whole. For the build to read the notices, give it their absolute path, such as
   `APP_LICENSES: "${{ github.workspace }}/target/THIRD-PARTY-LICENSES.html"`; a
-  build script reads a relative path from its crate's directory. Git Bash turns an argument that starts with `/` into a path, so call a
-  Windows program such as Inno Setup's `iscc`, which the windows-2025 runners have, with
-  `MSYS_NO_PATHCONV=1`, and give it paths through `cygpath -w`. The script is a rule, like the
-  workflows, and `just actionlint` shellchecks it. Write it, then set the answer in the same rules
-  pull request:
+  build script reads a relative path from its crate's directory.
+  Git Bash turns an argument that starts with `/` into a path, so call a Windows program such as
+  Inno Setup's `iscc`, which the windows-2025 runners have, with `MSYS_NO_PATHCONV=1`, and give it
+  paths through `cygpath -w`.
+  The script is a rule, like the workflows, and `just actionlint` shellchecks it. Write it, then
+  set the answer in the same rules pull request, with files for each of the project's targets:
 
   ```sh
   uvx copier update --defaults --vcs-ref=:current: \
-    --data 'release={checksums: SHA256SUMS.txt, files: {x86_64-pc-windows-msvc: ["app-{version}-x64.zip"]}}'
+    --data 'release={checksums: SHA256SUMS.txt, files: {
+      x86_64-pc-windows-msvc: ["teamdiff-{version}-x86_64-pc-windows-msvc.zip"]
+    }}'
   ```
 
   The answer replaces the whole mapping, so repeat every key you keep.
+
+- **Deploy kit.** Keep the scripts and units that install and run it on a host in `deploy/`.
+  They are code, and `just policy` runs shellcheck on the scripts; "Send a change" in
+  [CONTRIBUTING.md](../CONTRIBUTING.md#send-a-change) says which files there stay rules.
 
 ## Change an answer
 
@@ -263,8 +281,9 @@ hold need more than the update, and two can't change this way at all:
 - **Web UI.** The update doesn't add the app, so land it first, in a code pull request:
   `crates/teamdiff/web` with a `package.json` that has `check` and `build` scripts, its
   `bun.lock` and its sources. Leave out its `tsconfig.json`, and any `.gitignore`, `bunfig.toml`
-  or `.npmrc`, which are rules. Write the `bun.lock` with `bun install --lockfile-only` in the
-  app's directory, and don't run a plain `bun install` or `just web-build` on that branch: until
+  or `.npmrc`, which are rules. In the app's directory, write the `bun.lock` with
+  `bun install --save-text-lockfile --lockfile-only`, the command `just web-install` names when
+  it's missing, and don't run a plain `bun install` or `just web-build` on that branch: until
   the update merges, `.gitignore` doesn't ignore the app's `node_modules/` and `dist/`, so
   `just rule-changes` counts what they write. Then run the update with `--data web_ui=true`, and
   add the app's settings files to its pull request.

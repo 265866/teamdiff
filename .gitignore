@@ -6,3 +6,7 @@
 /.idea/
 /.vscode/
 *.swp
+
+# Raw API responses `teamdiff --dump responses` writes when run from here; they hold real
+# players' data.
+/responses/
