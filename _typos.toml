@@ -1,2 +1,6 @@
 [files]
 extend-exclude = ["Cargo.lock"]
+
+[default.extend-words]
+# The terminal UI crate teamdiff draws with, which typos would correct to "ratatouille".
+ratatui = "ratatui"

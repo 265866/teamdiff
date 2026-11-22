@@ -3,7 +3,11 @@
 [trellis_lints]
 # Crates allowed to contain unsafe code (`unsafe_outside_unsafe_crate`). Keep unsafe code in a crate
 # of its own and list it here.
-unsafe_crates = []
+unsafe_crates = [
+    # Hosts WebView2 in a hidden Win32 window: its COM, window and message-loop calls are ones
+    # `windows` and `webview2-com` expose only as unsafe.
+    "teamdiff_browser",
+]
 # Type names that may be written with their module, such as `io::Error` (`qualified_type_path`).
 ambiguous_type_names = ["Error", "Result"]
 # Crates whose `#[doc(hidden)]` items this project owns and may use (`foreign_doc_hidden`).
