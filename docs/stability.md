@@ -22,5 +22,5 @@ Your scripts, links and the commands in [Install](install.md) and
 - The `vX.Y.Z` tag form.
 - The release workflow, `.github/workflows/release.yml`, and the `main` branch it runs on.
 - The repository, `265866/teamdiff`.
-- The archive names [Install](install.md) lists, and the
-  `SHA256SUMS` and `attestation.json` files.
+- The file names [Install](install.md) lists, and the
+  `SHA256SUMS.txt` and `attestation.json` files.
