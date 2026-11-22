@@ -1,4 +1,4 @@
-use std::{future, io};
+use std::io;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch::error::RecvError;
@@ -64,9 +64,12 @@ impl Site {
     /// Waits until at least `count` `/slow` requests have arrived, so a test can act while the
     /// first is still unanswered.
     ///
+    /// It waits for as long as it takes, so a test that might never send them bounds the wait
+    /// with a timeout.
+    ///
     /// # Errors
     ///
-    /// Fails when the site stopped serving first.
+    /// Fails only when the site's server has stopped, as when the runtime serving it shuts down.
     pub async fn slow_requests(&self, count: usize) -> Result<(), RecvError> {
         let mut slow = self.slow.clone();
         slow.wait_for(|arrived| *arrived >= count).await?;
@@ -106,7 +109,9 @@ async fn respond(mut socket: TcpStream, cors: String, slow: Sender<usize>) {
             *arrived += 1;
         });
         if first {
-            future::pending::<()>().await;
+            let mut byte = [0u8; 1];
+            while matches!(socket.read(&mut byte).await, Ok(read) if read > 0) {}
+            return;
         }
     }
     let (status, extra, body) = match path.as_str() {

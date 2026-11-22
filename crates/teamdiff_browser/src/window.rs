@@ -581,8 +581,8 @@ fn hidden_window() -> Result<HWND> {
     // SAFETY: `class` is a filled-in WNDCLASSW whose procedure and names live for the whole
     // program.
     unsafe { WindowsAndMessaging::RegisterClassW(&raw const class) };
-    // SAFETY: the class is registered, the names are static strings, and every other argument is
-    // a plain value or none.
+    // SAFETY: the names are static strings and every other argument is a plain value or none. If
+    // registering the class failed, the call fails and returns an error rather than a window.
     let hwnd = unsafe {
         WindowsAndMessaging::CreateWindowExW(
             WINDOW_EX_STYLE::default(),

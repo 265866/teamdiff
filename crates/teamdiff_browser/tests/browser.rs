@@ -6,9 +6,14 @@ use std::time::Duration;
 use teamdiff_browser::test_support::{Profile, Site};
 use teamdiff_browser::{Browser, Response};
 use tokio::runtime::Builder;
+use tokio::time;
 
 /// How long each request may take, page load included.
 const TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How long the refused-page test's request may take. A refused page answers only once the
+/// request times out, so this test waits it out in full; the local page loads well within it.
+const REFUSED_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Runs `test` on a multi-threaded runtime, as the app runs the browser's callers.
 fn block_on<F: Future>(test: F) -> F::Output {
@@ -106,7 +111,10 @@ fn a_reload_sends_requests_in_flight_again() {
             let (b, url) = (Arc::clone(&b), format!("{}/slow", site.api));
             async move { get(&b, &url).await }
         });
-        site.slow_requests(1).await.unwrap();
+        time::timeout(TIMEOUT, site.slow_requests(1))
+            .await
+            .expect("the page should send /slow")
+            .unwrap();
         b.reload().unwrap();
         assert_eq!(
             slow.await.unwrap().status,
@@ -114,7 +122,10 @@ fn a_reload_sends_requests_in_flight_again() {
             "the site never answers the first /slow, so only the request the reloaded page sent \
              again can answer"
         );
-        site.slow_requests(2).await.unwrap();
+        time::timeout(TIMEOUT, site.slow_requests(2))
+            .await
+            .expect("the reloaded page should send /slow again")
+            .unwrap();
     });
 }
 
@@ -123,7 +134,12 @@ fn a_refused_page_answers_as_a_refusal() {
     block_on(async {
         let site = Site::start().await.unwrap();
         let profile = Profile::try_new("refused-test").unwrap();
-        let b = Browser::start(profile.dir(), &format!("{}/blocked", site.page), TIMEOUT).unwrap();
+        let b = Browser::start(
+            profile.dir(),
+            &format!("{}/blocked", site.page),
+            REFUSED_TIMEOUT,
+        )
+        .unwrap();
         let r = get(&b, &format!("{}/data", site.api)).await;
         assert_eq!(r.status, 0, "a refused page answers with no status: {r:?}");
         assert!(r.body.contains("HTTP 403"), "{r:?}");
