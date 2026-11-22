@@ -1,0 +1,48 @@
+name: Privacy
+
+# teamdiff reads players' Riot IDs, PUUIDs and match data, so personal data must never reach the
+# repository. scripts/privacy-check.sh scans every file, path and commit message in HEAD's
+# history, every tag, and a pull request's title and description, which a squash merge makes the
+# commit on main. Findings name the place and the rule, never the match, since CI logs are public.
+# The checkout still lists the repository's branch and tag names, which are public anyway.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Privacy check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    # An explicit bash runs with pipefail, so a failed jq fails the step instead of handing the
+    # check empty text that passes.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the history
+        run: scripts/privacy-check.sh --history
+
+      # Read from the event file rather than `env:`, which the log prints in full at the top of the
+      # step, so the text would reach the public log before the check could refuse it.
+      - name: Check the title and description
+        if: github.event_name == 'pull_request'
+        run: |
+          jq -r '.pull_request.title, "", (.pull_request.body // "")' "$GITHUB_EVENT_PATH" \
+            | scripts/privacy-check.sh --stdin "PR title and description"

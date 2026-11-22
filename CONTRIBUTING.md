@@ -87,6 +87,15 @@ lowered lint level, no new exception without a reason that holds up, no skipped 
 Then review the diff against the [review checklist](docs/style.md#checked-in-review) and the
 [Code](#code) section below, and fix what holds up.
 
+### Personal data
+
+teamdiff reads players' Riot IDs, PUUIDs and match data, so none of it may reach the repository.
+The Privacy workflow runs `scripts/privacy-check.sh --history` on every pull request and push to
+`main`, and checks a pull request's title and description too. It fails on emails, local user
+paths, tokens, Riot IDs, UUIDs that aren't public game content, and binary files that
+`.privacy-allow` doesn't list with their SHA-256. `just ci` doesn't run it, so run
+`scripts/privacy-check.sh` in Git Bash before you commit. Made-up Riot IDs use the tag `DEMO`.
+
 ### Advisories
 
 The Advisories workflow also runs `just deny` every week. A new advisory can fail a pull request
