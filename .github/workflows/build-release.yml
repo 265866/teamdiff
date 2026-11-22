@@ -1,0 +1,113 @@
+name: Release build
+
+# Builds the archives a release attaches, one per target. The release workflow calls it. It also
+# runs on pull requests that change what goes into the build, and by hand from the Actions tab.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit or tag to build
+        type: string
+        required: true
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .cargo/**
+      - .github/workflows/build-release.yml
+      - Cargo.lock
+      - Cargo.toml
+      - LICENSE*
+      - README.md
+      - about.hbs
+      - about.toml
+      - crates/*/Cargo.toml
+      - crates/*/build.rs
+      - rust-toolchain.toml
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: just@1.59.0,cargo-about@0.9.3
+
+      - name: Write the license notices
+        run: just notices
+
+      # No cache: a cache written by another workflow could change what ships.
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --locked --release --package teamdiff --target "$TARGET"
+
+      - name: Check the exe runs without the Visual C++ runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          $exe = [IO.File]::ReadAllBytes("target\$env:TARGET\release\teamdiff.exe")
+          if ([Text.Encoding]::ASCII.GetString($exe).Contains('VCRUNTIME140')) {
+            throw 'teamdiff.exe imports VCRUNTIME140.dll, so +crt-static from .cargo/config.toml was not applied.'
+          }
+
+      - name: Archive
+        id: archive
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: teamdiff
+          PACKAGE: teamdiff
+        run: |
+          version=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -r --arg name "$PACKAGE" '.packages[] | select(.name == $name) | .version')
+          stem="$NAME-$version-$TARGET"
+          mkdir -p "dist/$stem"
+          cp LICENSE-MIT LICENSE-APACHE README.md target/THIRD-PARTY-LICENSES.html "dist/$stem/"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "target/$TARGET/release/$NAME.exe" "dist/$stem/"
+            (cd dist && 7z a -tzip "$stem.zip" "$stem" > /dev/null)
+          else
+            cp "target/$TARGET/release/$NAME" "dist/$stem/"
+            tar -C dist -czf "dist/$stem.tar.gz" "$stem"
+          fi
+          rm -r "dist/$stem"
+          echo "artifact=$stem" >> "$GITHUB_OUTPUT"
+
+      # A week is long enough to re-run a failed publish job, and keeps the archives from filling a
+      # private repository's storage.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.archive.outputs.artifact }}
+          path: dist/*
+          retention-days: 7
+          if-no-files-found: error

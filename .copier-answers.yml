@@ -1,0 +1,15 @@
+# Copier writes this file. `uvx copier update` reads it to update the project from trellis.
+_commit: v0.15.0
+_src_path: https://github.com/265866/trellis.git
+architectures:
+- x86_64
+author: Colton
+description: 'A terminal companion for VALORANT on Windows: your lobby''s ranks, records
+    and recent form, and the post-game results.'
+github_owner: '265866'
+kind: binary
+license: MIT OR Apache-2.0
+platforms:
+- windows
+project_name: teamdiff
+visibility: public

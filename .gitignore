@@ -1,0 +1,8 @@
+/target
+
+# Local agent and editor state. A tracked agent file still fails `just policy`.
+/.claude/
+.DS_Store
+/.idea/
+/.vscode/
+*.swp

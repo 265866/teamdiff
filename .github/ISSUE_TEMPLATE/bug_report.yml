@@ -1,0 +1,47 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Report a vulnerability privately, as
+        [SECURITY.md](https://github.com/265866/teamdiff/blob/main/SECURITY.md)
+        says, not here.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version you ran, such as 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - Release archive
+        - cargo install from source
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Remove secrets first.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Any error message or log output. Remove secrets first.
+      render: text

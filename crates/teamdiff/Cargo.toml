@@ -1,0 +1,19 @@
+[package]
+name = "teamdiff"
+description = "A terminal companion for VALORANT on Windows: your lobby\u0027s ranks, records and recent form, and the post-game results."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "teamdiff"
+path = "src/main.rs"
+
+[dependencies]
+teamdiff_core = { path = "../teamdiff_core" }
+
+[lints]
+workspace = true

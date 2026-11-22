@@ -1,0 +1,11 @@
+# `just notices` writes target/THIRD-PARTY-LICENSES.html from about.hbs, the third-party license
+# notices that every release ships. A dependency under a license missing here fails it. Keep this
+# list in step with `[licenses]` in deny.toml.
+accepted = ["Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Zlib"]
+targets = [
+    "x86_64-pc-windows-msvc",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# The workspace's own crates aren't third-party.
+private = { ignore = true }
