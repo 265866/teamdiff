@@ -72,7 +72,7 @@ pub struct RecentMatch {
     pub rounds_won: u32,
     /// Rounds the player's team lost.
     pub rounds_lost: u32,
-    /// The player's stats; only the agent and the counts are set.
+    /// The player's stats; only the agent, the counts and the performance score are set.
     pub player: PlayerMatch,
 }
 

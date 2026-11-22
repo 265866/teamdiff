@@ -41,7 +41,7 @@ Riot Games does not endorse or sponsor this project."
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "the binary does something different for each command by matching every one, so a               new command has to fail its build until the binary handles it"
+    reason = "the binary does something different for each command by matching every one, so a new command has to fail its build until the binary handles it"
 )]
 pub enum Command {
     /// Print [`HELP`].
@@ -58,7 +58,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
     clippy::exhaustive_structs,
-    reason = "the binary takes the arguments apart into the mode and the update setting it starts               with"
+    reason = "the binary takes the arguments apart into the mode and the update setting it starts with"
 )]
 pub struct Args {
     /// Live or demo.
@@ -71,7 +71,7 @@ pub struct Args {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "the binary starts the controller or the demo by matching every mode, so a new mode               has to fail its build until the binary starts it"
+    reason = "the binary starts the controller or the demo by matching every mode, so a new mode has to fail its build until the binary starts it"
 )]
 pub enum Mode {
     /// The running game, with raw API responses saved under `dump` when it is set.

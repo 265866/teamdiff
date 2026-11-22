@@ -37,7 +37,11 @@ pub enum Phase {
 
 /// Which team a player is on, from your side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "teamdiff_ui draws one team table per side, so a new side has to fail its build \
+              rather than leave its players out of every table"
+)]
 pub enum Side {
     /// Your team.
     Ally,
@@ -47,7 +51,11 @@ pub enum Side {
 
 /// A player's agent pick in agent select.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "teamdiff_ui marks each pick state by matching every one, so a new state has to \
+              fail its build until it has a mark"
+)]
 pub enum Pick {
     /// No agent picked.
     None,
