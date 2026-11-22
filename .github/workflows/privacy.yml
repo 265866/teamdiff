@@ -1,9 +1,10 @@
 name: Privacy
 
 # teamdiff reads players' Riot IDs, PUUIDs and match data, so personal data must never reach the
-# repository. scripts/privacy-check.sh scans every file, path, commit message and tag in HEAD's
-# history, and a pull request's title and description, which a squash merge makes the
+# repository. scripts/privacy-check.sh scans every file, path and commit message in HEAD's
+# history, every tag, and a pull request's title and description, which a squash merge makes the
 # commit on main. Findings name the place and the rule, never the match, since CI logs are public.
+# The checkout still lists the repository's branch and tag names, which are public anyway.
 
 on:
   push:
@@ -33,11 +34,10 @@ jobs:
       - name: Check the history
         run: scripts/privacy-check.sh --history
 
+      # Read from the event file rather than `env:`, which the log prints in full at the top of the
+      # step, so the text would reach the public log before the check could refuse it.
       - name: Check the title and description
         if: github.event_name == 'pull_request'
-        env:
-          TITLE: ${{ github.event.pull_request.title }}
-          BODY: ${{ github.event.pull_request.body }}
         run: |
-          printf '%s\n\n%s\n' "$TITLE" "$BODY" \
+          jq -r '.pull_request.title, "", (.pull_request.body // "")' "$GITHUB_EVENT_PATH" \
             | scripts/privacy-check.sh --stdin "PR title and description"

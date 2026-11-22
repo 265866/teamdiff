@@ -17,7 +17,9 @@
 # letters, digits and plain punctuation, is named by its git object instead, which `git ls-files
 # -s`, `git ls-tree -r <commit>` or `git show-ref` finds.
 #
-# Commit authors and committers aren't checked: every contributor's email address is in them.
+# Contributors' identities aren't checked: commit authors and committers, taggers, and a commit
+# message's `Co-authored-by:` and `Signed-off-by:` trailers. Every contributor's email address is in
+# them.
 set -euo pipefail
 
 # In a UTF-8 locale, a byte that isn't valid UTF-8 makes bash's `read` run on past a delimiter and
@@ -90,7 +92,6 @@ while read -r value; do
 done < <(allowed email)
 allowed_binaries=$(allowed binary)
 
-
 # A place is `<template>\x1f<kind>\x1f<rev>\x1f<name>`: `%P` in the template stands for a file path
 # (kind `file`, at <rev>, or in the index when <rev> is empty) or a tag (kind `tag`, named by its
 # ref). Names stay out of the template, so one is printed only when it is plain and isn't a finding
@@ -157,6 +158,20 @@ add_lines() {
     places+=("$REPLY")
   done
 }
+# Adds each line of a commit message from standard input, like add_lines, but skips
+# `Co-authored-by:` and `Signed-off-by:` trailers. They name contributors, whose identities aren't
+# checked, and GitHub writes the first into a squash merge's message after the pull request's
+# checks have run, where no one could fix it.
+add_message() {
+  local template=$1 n=0 line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    [[ "${line,,}" =~ ^(co-authored-by|signed-off-by): ]] && continue
+    lines+=("$line")
+    place "$template line $n"
+    places+=("$REPLY")
+  done
+}
 # Adds a path, and the target of a symlink, which git grep doesn't read.
 add_path() {
   local rev=$1 filemode=$2 object=$3 path=$4
@@ -193,7 +208,7 @@ else
   # One NUL-terminated record per commit: its id, then the message.
   while IFS= read -r -d '' record; do
     rev=${record%%$'\x1f'*}
-    add_lines "commit $rev" <<<"${record#*$'\x1f'}"
+    add_message "commit $rev" <<<"${record#*$'\x1f'}"
   done < <(head_log -z --format='%H%x1f%B')
   if [[ "$mode" == history ]]; then
     while IFS= read -r tag; do
@@ -273,7 +288,6 @@ check_tags < <(scan "-i -E" "$riot_tag_field" | while next; do
   value="${value%\"}"
   printf '%s\0%s\0' "$place" "${value##*\"}"
 done)
-
 
 # Text checks can't see into binary files, and images or recordings can show real players, so each
 # binary file is listed in .privacy-allow with its SHA-256 once someone has looked at it. Text in an
