@@ -2848,10 +2848,13 @@ name = "teamdiff_live"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
+ "jiff 1.0.2",
  "reqwest",
  "semver",
  "serde_json",
  "sigstore-verify",
+ "teamdiff_browser",
  "teamdiff_core",
  "tokio",
 ]
