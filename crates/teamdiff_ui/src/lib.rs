@@ -8,6 +8,8 @@ mod draw;
 mod icons;
 #[cfg(test)]
 mod rendering;
+#[cfg(test)]
+mod screenshots;
 mod terminal;
 
 pub use terminal::run;
