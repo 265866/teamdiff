@@ -33,7 +33,7 @@ fn png(kind: Accolade) -> &'static [u8] {
     }
 }
 
-fn tinted(kind: Accolade) -> Option<DynamicImage> {
+pub(crate) fn tinted(kind: Accolade) -> Option<DynamicImage> {
     let src = image::load_from_memory(png(kind)).ok()?.to_rgba8();
     let out = RgbaImage::from_fn(src.width(), src.height(), |x, y| {
         let a = src.get_pixel(x, y)[3];
