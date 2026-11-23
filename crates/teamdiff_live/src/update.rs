@@ -439,6 +439,9 @@ mod tests {
 
     /// The build provenance GitHub CLI 2.102.0's release workflow made for its Windows installer: a real attestation from the
     /// same action and Sigstore instance as teamdiff's.
+    ///
+    /// It is public data, the release attestation `cli/cli` published, recorded as published. No value
+    /// in it is replaced, because the signature checks need its real bytes.
     const GH_ATTESTATION: &str = include_str!("../tests/fixtures/gh-2.102.0-msi.sigstore.json");
     const GH_MSI: &str = "gh_2.102.0_windows_amd64.msi";
     const GH_BUILDER: Builder = Builder {
