@@ -100,9 +100,7 @@ A copy of teamdiff 0.2.1 or earlier can't update itself to this repository's rel
 - [Verify a release](docs/verifying-releases.md): check that a download came from this repository.
 - [Design](docs/design.md): the goals, the architecture, and the decisions behind them.
 - [Stability](docs/stability.md): what a release can change, and what to read before you upgrade.
-- [Code style](docs/style.md): the style rules a tool checks, and the review checklist for the rest.
 - [Contributing](CONTRIBUTING.md): set up, run the checks, and send a change.
-- [Maintain](docs/maintaining.md): the owner's repository settings, releases and trellis updates.
 - [Security policy](SECURITY.md): how to report a vulnerability.
 - [Changelog](CHANGELOG.md): what changed in each release.
 
