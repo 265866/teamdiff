@@ -28,7 +28,10 @@ the rules it follows and where every number comes from.
 - **Keeps itself up to date** from this repository's releases, after checking who built them. See
   [Updates](docs/usage.md#updates).
 
-![teamdiff in a match: your team and the enemy team, each player's agent, level, rank, peak rank, win rate this act and on Ascent, and K/D and headshot % over their last 5 matches, with party markers, an incognito player on each team, and the score 5 to 3; every player is made up](docs/screenshots/in-game.svg)
+[![teamdiff in a match: your team and the enemy team, each player's agent, level, rank, peak rank, win rate this act and on Ascent, and K/D and headshot % over their last 5 matches, with party markers, an incognito player on each team, and the score 5 to 3; every player is made up](docs/screenshots/in-game.svg)](docs/usage.md#screenshots)
+
+Every other screen, from waiting for the game to the post-game scoreboard, is in
+[Screenshots](docs/usage.md#screenshots).
 
 > [!NOTE]
 > teamdiff is unofficial. It uses the Riot Client's sign-in on your PC to ask Riot's servers what
