@@ -23,3 +23,6 @@ Your scripts, links and the commands in [Install](install.md) and
 - The release workflow, `.github/workflows/release.yml`, and the `main` branch it runs on.
 - The repository, `265866/teamdiff`.
 - The file names [Install](install.md) lists, and the `SHA256SUMS.txt` and `attestation.json` files.
+- What `attestation.json` holds: one Sigstore bundle, whose statement names each
+  file [Install](install.md) lists by its name and SHA-256, so a program that updates itself
+  can check a download with it.

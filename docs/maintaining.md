@@ -89,7 +89,9 @@ Commit the generated project on a branch named `main` (`git init --initial-branc
 release-plz keeps a release pull request open with the next version and its `CHANGELOG.md` entry.
 Merging it releases that version, with that entry as the release notes;
 [release.yml](../.github/workflows/release.yml) does the rest. Before 1.0, a `feat` or a `!` bumps
-the minor version and a `fix` the patch version. To ship:
+the minor version and a `fix` the patch version. A release pull request whose changes are all
+test-only code, such as screenshot capture code, ships users nothing new, so it can wait open until
+a change that ships joins it. To ship:
 
 1. To reword an entry, edit `CHANGELOG.md` on the release pull request's branch, as the last step
    before you merge: the next merge to `main` closes the release pull request and opens a new one
@@ -114,9 +116,22 @@ the minor version and a `fix` the patch version. To ship:
 2. Under each breaking change, from a commit marked `!` or with a `BREAKING CHANGE:` footer, write
    what users must do before they upgrade. Edit `CHANGELOG.md` on the release pull request's
    branch, as in step 1. [Stability](stability.md) promises users this note.
-3. Merge the release pull request once its checks pass. Merge no other pull request until the
-   release workflow's **Tag** job finishes. A pull request merged before then can get no release
-   pull request until the next push to `main`.
+3. Merge the release pull request once its checks pass. Its CI runs `just policy-release`, which
+   fails on what `just policy` only notes: a `**To write:**` prompt left in the README or a page,
+   a README without an opening paragraph, or one without its picture: an image before its first
+   `##` linked to a heading of a page in `docs/`, or to a gallery page.
+   So the first release fails until the README is written. Run `just policy-release` to see
+   what is left. The release workflow runs it again before it tags or publishes anything. If it
+   fails there, after the merge, nothing is released: write what it names on a branch whose name
+   starts with `release-plz-`, such as `release-plz-readme`, and merge its pull request, which
+   releases the version the release pull request set. The check runs on the pushes release-plz
+   releases as `release-plz.toml` sets it up: from a pull request whose branch starts with
+   release-plz's default `pr_branch_prefix`, `release-plz-`, with `release_always = false`.
+   Changing either there is a rule change that must change the condition in
+   `.github/workflows/ci.yml` and `.github/workflows/release.yml` with it. Merge no other pull
+   request until the release workflow's **Tag** job
+   finishes. A pull request merged before then can get no release pull request until the next
+   push to `main`.
 4. If a later job fails, re-run the failed jobs. They pick up from the same tag.
 
 ### Keep releases verifiable
@@ -262,9 +277,8 @@ An update leaves them alone.
   `APP_LICENSES: "${{ github.workspace }}/target/THIRD-PARTY-LICENSES.html"`; a
   build script reads a relative path from its crate's directory.
 
-  Git Bash turns an argument that starts with `/` into a path, so call a Windows program such as
-  Inno Setup's `iscc`, which the windows-2025 runners have, with `MSYS_NO_PATHCONV=1`, and give it
-  paths through `cygpath -w`.
+  Git Bash turns an argument that starts with `/` into a path, so call a Windows program with
+  `MSYS_NO_PATHCONV=1`, and give it paths through `cygpath -w`.
 
   The script is a rule, like the workflows, and `just actionlint` shellchecks it. Write it, then
   set the answer in the same rules pull request, with files for each of the project's targets.
@@ -279,6 +293,63 @@ An update leaves them alone.
   ```
 
   The answer replaces the whole mapping, so repeat every key you keep.
+- **Windows installer.** The `release` answer's `installer` key gives a Windows target an installer,
+  which the release builds with Inno Setup and publishes as one of its files. It installs for the
+  current user alone, under `%LOCALAPPDATA%\Programs`, without administrator rights, with one Start
+  menu entry, an optional desktop entry and an entry in Windows' installed apps, and it runs
+  silently with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, so the program can update itself. To add
+  one, generate an AppId once, with `uuidgen` or, in PowerShell, `New-Guid`, and give it without
+  braces. The AppId must never change and must never be copied from another project: Windows finds
+  the installed program by it. Give every Windows target the same one, which the answer's check
+  requires: the x64 installer also runs on ARM64 Windows, and two AppIds would give one user two
+  installs and two uninstall entries. `copier update` refuses an answer, passed or typed at its
+  prompt, whose `app_id` differs from the one `.copier-answers.yml` holds for that target. It
+  doesn't compare when the update also passes `project_name`, as `--data-file .copier-answers.yml`
+  does, and it can't catch an edit to that file, an installer moved to another target with a new
+  AppId in one update, or one removed and later added back with another AppId. A first `copier copy`
+  that asks for the project's name and gets an installer answer typed at the prompt may print a
+  harmless `MissingFileWarning`. `file` names one of the target's `files`, ending in `.exe`, and
+  `name`, optional, is the name the installer shows, the answer's `name` by default:
+
+  ```sh
+  uvx copier update --defaults --vcs-ref=:current: \
+    --data 'release={checksums: SHA256SUMS.txt, files: {
+      x86_64-pc-windows-msvc: ["teamdiff-{version}-x64-setup.exe"]
+    }, installer: {
+      x86_64-pc-windows-msvc: {app_id: <GUID>, file: "teamdiff-{version}-x64-setup.exe"}
+    }}'
+  ```
+
+  Like the release files above, that's a starter: add the project's other targets and keys. trellis
+  then writes `release/installer.iss`, the installer's Inno Setup script, which every update
+  rewrites, and `release/installer-custom.iss` once, which it includes and an update never touches.
+  The custom file holds what is particular to the program: `[Code]`, such as an uninstaller that
+  waits while the program runs, which it can tell by a mutex the program creates; `[InstallDelete]`
+  for the files an older version installed that a newer one doesn't, which an upgrade otherwise
+  leaves; `[UninstallDelete]` for files the program writes; a mutex name; the icon, with
+  `SetupIconFile`; and extra `[Run]` entries, such as starting the program after an install. Inno
+  Setup refuses a `[Setup]` directive set twice, so the custom file changes the two installer.iss
+  lets it with a `#define`: `CloseApplications` and `SetupMutex`, such as the mutex an earlier
+  installer used. For a target with an installer, `release/package.sh` stages the files to install
+  in `STAGING`, with `teamdiff.exe` at its top, and writes only the target's other files
+  to `DIST`; the build then compiles the script with the pinned Inno Setup and writes the installer
+  to `DIST`. An update that drops the `installer` key deletes both files, the custom file too; git
+  history keeps it.
+
+  An upgrade closes the running program first, without asking in a silent install. Windows can't
+  close a process without a window, so when one of the program's processes has none, such as a tray
+  helper or a background worker, the installer rolls back, keeps the installed version and exits
+  with 5. Either give that process a hidden top-level window that exits on `WM_ENDSESSION`, or add
+  `#define CloseApplications "force"` to the custom file, which kills it without warning. The silent
+  uninstaller, `unins000.exe` in the install folder, returns about half a second before the folder
+  is gone, so a script that checks the folder waits for it.
+
+  The installer isn't signed, so Windows SmartScreen warns about it when it comes from a browser,
+  until users choose **More info** and **Run anyway**; a download through `gh`, `curl` or the
+  program's own updater gets no warning. trellis's tests install, upgrade and uninstall on
+  GitHub's Windows runners, which run elevated, so they don't prove a standard user's install. A
+  program that pins its repository's ID to verify updates stops updating when the repository
+  moves, and users then install the next version by hand.
 
 - **Deploy kit.** Keep the scripts and units that install and run it on a host in
   `crates/teamdiff/deploy/`. release-plz counts only the commits that change a file in a
@@ -381,13 +452,17 @@ hold need more than the update, and two can't change this way at all:
   outside `crates/` for it, but the crates keep their names and scaffold, so `just policy` fails,
   or passes on crates the new answer doesn't describe. To rename the project or change what it
   ships, generate a new project and move the code into it.
-- **Description.** The update changes `README.md` and `CONTRIBUTING.md`. Each crate's
-  `description` in its `Cargo.toml` and its `//!` crate docs keep the old sentence; change them
-  in a code pull request.
-- **License.** Between `MIT` and `MIT OR Apache-2.0`, the update is all it takes. To change it
+- **Description.** The update changes `CONTRIBUTING.md`. `README.md`, each crate's `description`
+  in its `Cargo.toml` and its `//!` crate docs keep the old sentence; change the README in any
+  pull request, and the crates in a code pull request.
+- **License.** Between `MIT` and `MIT OR Apache-2.0`, the update replaces the root's license
+  files. To change it
   to `none`, also remove `license.workspace = true` from every crate's `Cargo.toml`, in the
   update's pull request; Cargo can't load the workspace until each crate's line is gone.
   A crate's license line is a rule setting, so the pull request stays a rule change.
+  It leaves `README.md` alone, so make its `## License` section match in the update's pull
+  request. Under a license, `just policy` fails until the section links each of its files with a
+  relative link.
 - **Web UI.** The update doesn't add the app, so land it first, in a code pull request:
   `crates/teamdiff/web` with a `package.json` that has `check` and `build` scripts, its
   `bun.lock` and its sources. Leave out its `tsconfig.json`, and any `.gitignore`, `bunfig.toml`
@@ -395,10 +470,16 @@ hold need more than the update, and two can't change this way at all:
   `bun install --save-text-lockfile --lockfile-only`, the command `just web-install` names when
   it's missing, and don't run a plain `bun install` or `just web-build` on that branch: until
   the update merges, `.gitignore` doesn't ignore the app's `node_modules/` and `dist/`, so
-  `just rule-changes` counts what they write. Then run the update with `--data web_ui=true`, and
-  add the app's settings files to its pull request. When the app trips a check that only a rule
+  `just rule-changes` counts what they write. Then run the update with `--data web_ui=true` and
+  `--data 'other_interfaces=[web]'`, or, if the web UI becomes what a person sees first,
+  with `--data interface=web` and `--data 'other_interfaces=[terminal]'`. The update refuses
+  `web_ui=true` without `web` among the interfaces.
+  Add the app's settings files to its pull request. When the app trips a check that only a rule
   can settle, such as a class name `just typos` flags, which only an entry in `_typos.toml` lets
   through, land that rule in a rules pull request before the app's code pull request.
+- **README.** An update never touches `README.md`, so when an answer changes what it says, such as
+  the license, the visibility or a web UI, edit it in the update's pull request: its License
+  section, its release badge and its Verify a release entry.
 
 The other answers change only files the update writes.
 
@@ -413,14 +494,21 @@ projects" part says what to do before or after the update merges. To update by h
 uvx copier update --defaults
 ```
 
-An update never touches `crates/`, `Cargo.lock`, `CHANGELOG.md` or `docs/design.md`, which are
-yours after the project is generated. It is a rule change, so it can't also change code. Copier
-merges the new template into your edits to the files it renders, such as a crate's row in
-`CONTRIBUTING.md`, its settings in `Cargo.toml` and `release-plz.toml`, and a page's line in
-`README.md`. Where trellis changed a line you changed, or one next to it, Copier leaves conflict
-markers; resolve them before you commit. Once the update merges, run `just check-github` on
-`main`. A newer trellis can set more than the one you set up with, so if it reports a wrong
-setting, run `just setup-github`.
+An update never touches `crates/`, `Cargo.lock`, `CHANGELOG.md`, `docs/design.md` or `README.md`,
+which are yours after the project is generated. A new project's README starts as an outline, and
+one generated before trellis wrote outlines stays as it was. An update doesn't touch
+`docs/usage.md` either, the screenshots page, if the project has one.
+
+An update can change `readme_sections` in `Cargo.toml`, which lists the README's `##` sections,
+while the README keeps its own: `just policy` then fails until you rename or add the README's
+sections to match, in the update's pull request. The version's CHANGELOG entry says when it does.
+
+An update is a rule change, so it can't also change code. Copier merges the new template into
+your edits to the files it renders, such as a crate's row in `CONTRIBUTING.md` and its settings in
+`Cargo.toml` and `release-plz.toml`. Where trellis changed a line you changed, or one next to it,
+Copier leaves conflict markers; resolve them before you commit. Once the update merges, run
+`just check-github` on `main`. A newer trellis can set more than the one you set up with, so if it
+reports a wrong setting, run `just setup-github`.
 
 ## Renew the release token
 
