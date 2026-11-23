@@ -113,19 +113,21 @@ paths, tokens, Riot IDs, UUIDs that aren't public game content, and binary files
 ### Demo data and screenshots
 
 The screenshots in the README and in [Use teamdiff](docs/usage.md#screenshots) are the screens of
-`teamdiff --demo`, captured as [Screenshots](#screenshots) says. `crates/teamdiff_core/src/demo.rs`
-makes up every player, and `crates/teamdiff_ui/src/screenshots.rs` draws each screen with the
-app's own drawing code and writes it to `docs/screenshots/`. Nothing comes from a live game, and
-nothing connects anywhere.
+`teamdiff --demo`, and follow the [Screenshots](#screenshots) rules.
+`crates/teamdiff_core/src/demo.rs` makes up every player, and
+`crates/teamdiff_ui/src/screenshots.rs` draws each screen with the app's own drawing code and
+writes it to `docs/screenshots/`. Nothing comes from a live game, and the capture opens no
+connection: it is test-only drawing code that never touches the network.
 
 ```sh
 TEAMDIFF_WRITE_SCREENSHOTS=1 cargo test -p teamdiff_ui screenshots   # rewrite docs/screenshots/*.svg
 ```
 
 - **Drawn as the app draws.** The colors are the app's own, block characters are drawn as shapes
-  like the borders, and the accolade icons are the ones a terminal that shows images draws. The
-  post-game banner is drawn as it stands once its letters have appeared.
-- **Privacy check.** `just ci` runs the same test without the variable. It fails on a Riot ID in a
+  like the borders, so the post-game banner fills in any font, and the accolade icons are the ones
+  a terminal that shows images draws. The banner is drawn as it stands once its letters have
+  appeared.
+- **Screenshot test.** `just ci` runs the same test without the variable. It fails on a Riot ID in a
   screenshot that isn't one of the demo's, on a UUID, and on a word that the demo's drawing of the
   same screen doesn't have, numbers aside, so the version and the timers may change. Rewrite the
   screenshots when a change alters what a screen says. It also fails when `docs/screenshots/`
