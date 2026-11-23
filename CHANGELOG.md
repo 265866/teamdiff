@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/265866/teamdiff/compare/v0.3.0...v0.3.1) - 2026-11-23
+
+### Other
+
+- *(update)* say the gh attestation fixture is public data kept as published ([#28](https://github.com/265866/teamdiff/pull/28))
+- *(ui)* capture the demo screens as SVG screenshots for the docs ([#22](https://github.com/265866/teamdiff/pull/22))
+
 ## [0.3.0](https://github.com/265866/teamdiff/releases/tag/v0.3.0) - 2026-11-22
 
 teamdiff now lives in this repository and is built on [trellis](https://github.com/265866/trellis).
