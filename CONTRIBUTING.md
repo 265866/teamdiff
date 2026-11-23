@@ -108,6 +108,29 @@ paths, tokens, Riot IDs, UUIDs that aren't public game content, and binary files
 `.privacy-allow` doesn't list with their SHA-256. `just ci` doesn't run it, so run
 `scripts/privacy-check.sh` in Git Bash before you commit. Made-up Riot IDs use the tag `DEMO`.
 
+### Demo data and screenshots
+
+The screenshots in the README and in [Use teamdiff](docs/usage.md#screenshots) are the screens of
+`teamdiff --demo`. `crates/teamdiff_core/src/demo.rs` makes up every player, and
+`crates/teamdiff_ui/src/screenshots.rs` draws each screen with the app's own drawing code and
+writes it to `docs/screenshots/` as an SVG of a terminal window. Nothing comes from a live game,
+and nothing connects anywhere.
+
+```sh
+TEAMDIFF_WRITE_SCREENSHOTS=1 cargo test -p teamdiff_ui screenshots   # rewrite docs/screenshots/*.svg
+```
+
+- **Drawn as the app draws.** The colors are the app's own; borders and block characters are drawn
+  as shapes, so they join in any font, and the accolade icons are the ones a terminal that shows
+  images draws. The post-game banner is drawn as it stands once its letters have appeared.
+- **Privacy check.** `just ci` runs the same test without the variable. It fails on a Riot ID in a
+  screenshot that isn't one of the demo's, on a UUID, and on a word that the demo's drawing of the
+  same screen doesn't have, numbers aside, so the version and the timers may change. Rewrite the
+  screenshots when a change alters what a screen says. It also fails when `docs/screenshots/`
+  holds a file the capture doesn't write, or the docs show one it doesn't. Each SVG keeps its
+  screen as plain text in `<desc>` too, so `scripts/privacy-check.sh` reads each name with its tag.
+- **Read the images** before you commit them, for example in a browser.
+
 ### Advisories
 
 The Advisories workflow also runs `just deny` every week. A new advisory can fail a pull request
